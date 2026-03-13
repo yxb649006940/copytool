@@ -36,7 +36,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         if let button = statusItem?.button {
-            button.image = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: "剪贴板历史")
+            button.image = NSImage(systemSymbolName: "clipboard", accessibilityDescription: "剪贴板历史")
             button.action = #selector(handleStatusItemClick)
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
