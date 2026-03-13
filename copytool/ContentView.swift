@@ -2,6 +2,17 @@ import SwiftUI
 
 struct ContentView: View {
     @ObservedObject private var clipboardManager = ClipboardManager.shared
+    @State private var searchText = ""
+    @State private var selectedIndex: Int?
+
+    var filteredHistory: [HistoryItem] {
+        if searchText.isEmpty {
+            return clipboardManager.history
+        }
+        return clipboardManager.history.filter { item in
+            item.displayText.lowercased().contains(searchText.lowercased())
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -26,35 +37,126 @@ struct ContentView: View {
         .background(Color(NSColor.windowBackgroundColor))
     }
 
+    private func showSettingsWindow() {
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: NSNotification.Name("OpenSettings"), object: nil)
+        }
+    }
+
     private var headerView: some View {
-        HStack {
-            Text("剪贴板历史记录")
-                .font(.headline)
-                .foregroundColor(.primary)
+        VStack(spacing: 12) {
+            HStack {
+                Text("剪贴板历史记录")
+                    .font(.headline)
+                    .foregroundColor(.primary)
 
-            Spacer()
+                Spacer()
 
-            Text("共 \(clipboardManager.history.count) 条记录")
-                .font(.footnote)
-                .foregroundColor(.secondary)
+                HStack(spacing: 8) {
+                    Button(action: {
+                        showSettingsWindow()
+                    }) {
+                        Image(systemName: "gearshape")
+                            .font(.system(size: 14))
+                            .foregroundColor(.secondary)
+                            .padding(6)
+                            .background(Color(NSColor.textBackgroundColor))
+                            .cornerRadius(4)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    .onHover { isHovered in
+                        if isHovered {
+                            NSCursor.pointingHand.push()
+                        } else {
+                            NSCursor.pop()
+                        }
+                    }
+
+                    Text("共 \(clipboardManager.history.count) 条记录")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                }
+            }
+
+            // 搜索框
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+
+                TextField("搜索...", text: $searchText)
+                    .textFieldStyle(PlainTextFieldStyle())
+                    .font(.system(size: 13))
+
+                if !searchText.isEmpty {
+                    Button(action: {
+                        searchText = ""
+                    }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color(NSColor.textBackgroundColor))
+            .cornerRadius(6)
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
+            )
         }
     }
 
     private var historyListView: some View {
         Group {
-            if clipboardManager.history.isEmpty {
-                emptyStateView
+            if filteredHistory.isEmpty {
+                if searchText.isEmpty {
+                    emptyStateView
+                } else {
+                    searchEmptyStateView
+                }
             } else {
                 ScrollView {
                     VStack(spacing: 8) {
-                        ForEach(0..<clipboardManager.history.count, id: \.self) { index in
-                            HistoryItemView(item: clipboardManager.history[index], index: index)
+                        ForEach(Array(filteredHistory.enumerated()), id: \.element.id) { (filteredIndex, item) in
+                            // 找到原始索引
+                            if let originalIndex = clipboardManager.history.firstIndex(where: { $0.id == item.id }) {
+                                HistoryItemView(
+                                    item: item,
+                                    index: originalIndex,
+                                    isSelected: selectedIndex == originalIndex,
+                                    onSelect: {
+                                        selectedIndex = originalIndex
+                                    }
+                                )
+                            }
                         }
                     }
                     .padding(.bottom, 8)
                 }
             }
         }
+    }
+
+    private var searchEmptyStateView: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 48))
+                .foregroundColor(.secondary)
+
+            Text("未找到匹配的记录")
+                .font(.headline)
+                .foregroundColor(.secondary)
+
+            Text("尝试使用其他关键词搜索")
+                .font(.subheadline)
+                .foregroundColor(.secondary.opacity(0.6))
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding()
     }
 
     private var emptyStateView: some View {
@@ -90,7 +192,7 @@ struct ContentView: View {
 
             Spacer()
 
-            Text("快捷键: Cmd + Opt + V")
+            Text("快捷键: \(SettingsManager.shared.hotkey.displayString)")
                 .font(.system(size: 11))
                 .foregroundColor(.secondary)
         }
@@ -100,6 +202,8 @@ struct ContentView: View {
 struct HistoryItemView: View {
     let item: HistoryItem
     let index: Int
+    let isSelected: Bool
+    let onSelect: () -> Void
     @ObservedObject private var clipboardManager = ClipboardManager.shared
 
     var body: some View {
@@ -112,13 +216,16 @@ struct HistoryItemView: View {
                 deleteButton
             }
             .padding(12)
-            .background(Color(NSColor.textBackgroundColor))
-            .cornerRadius(8)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(isSelected ? Color.blue.opacity(0.15) : Color(NSColor.textBackgroundColor))
+            )
             .overlay(
                 RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
+                    .stroke(isSelected ? Color.blue : Color(NSColor.separatorColor), lineWidth: isSelected ? 1.5 : 0.5)
             )
             .onTapGesture {
+                onSelect()
                 clipboardManager.copyToClipboard(item: item)
             }
             .onHover { isHovered in
@@ -158,15 +265,65 @@ struct HistoryItemView: View {
                 Image(systemName: "doc.text")
                     .font(.system(size: 16))
                     .foregroundColor(.blue)
-            } else {
+            } else if item.contentType == .image {
                 Image(systemName: "photo")
                     .font(.system(size: 16))
                     .foregroundColor(.green)
+            } else if item.contentType == .file {
+                // 根据文件扩展名显示不同的图标
+                Image(systemName: fileIconName(for: item.fileName))
+                    .font(.system(size: 16))
+                    .foregroundColor(.orange)
             }
         }
         .frame(width: 32, height: 32)
         .background(Color(NSColor.controlBackgroundColor))
         .cornerRadius(6)
+    }
+
+    private func fileIconName(for fileName: String?) -> String {
+        guard let name = fileName else {
+            return "paperplane.fill" // 默认文件图标
+        }
+
+        let ext = (name as NSString).pathExtension.lowercased()
+
+        // 图片文件
+        if ["jpg", "jpeg", "png", "gif", "bmp", "tiff"].contains(ext) {
+            return "photo.fill"
+        }
+
+        // 文档文件
+        if ["pdf", "doc", "docx", "txt", "rtf", "html", "htm"].contains(ext) {
+            return "doc.fill"
+        }
+
+        // 代码文件
+        if ["swift", "java", "py", "js", "html", "css", "php", "rb", "go", "c", "cpp"].contains(ext) {
+            return "chevron.left.forwardslash.chevron.right"
+        }
+
+        // 压缩文件
+        if ["zip", "rar", "7z", "tar", "gz"].contains(ext) {
+            return "folder.fill.badge.questionmark"
+        }
+
+        // 视频文件
+        if ["mp4", "mov", "avi", "mkv", "flv"].contains(ext) {
+            return "video.fill"
+        }
+
+        // 音频文件
+        if ["mp3", "wav", "aac", "m4a"].contains(ext) {
+            return "music.note"
+        }
+
+        // 文件夹
+        if ext.isEmpty || ["folder", "dir"].contains(ext) {
+            return "folder.fill"
+        }
+
+        return "paperplane.fill" // 默认文件图标
     }
 
     private var deleteButton: some View {

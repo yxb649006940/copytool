@@ -4,29 +4,41 @@ import Cocoa
 
 class ClipboardManager: ObservableObject {
     @Published var history: [HistoryItem] = []
-    private let maxHistoryCount = 10
     private var clipboardObserver: Int?
     private let pasteboard = NSPasteboard.general
 
     // 保存最后添加的内容，避免重复添加
     private var lastText: String?
     private var lastImageData: Data?
+    private var lastFileURL: URL?
 
     static let shared = ClipboardManager()
 
     private init() {
         loadHistory()
         setupClipboardObserver()
+        cleanExpiredItems() // 加载时清理过期记录
     }
 
     private func loadHistory() {
         if let data = UserDefaults.standard.data(forKey: "clipboardHistory"),
            let items = try? JSONDecoder().decode([HistoryItem].self, from: data) {
-            self.history = items
+            // 过滤掉过期的记录
+            let settings = SettingsManager.shared
+            self.history = items.filter { !settings.isItemExpired(timestamp: $0.timestamp) }
         }
     }
 
-    private func saveHistory() {
+    // 清理过期的历史记录
+    func cleanExpiredItems() {
+        let settings = SettingsManager.shared
+        history.removeAll { item in
+            return settings.isItemExpired(timestamp: item.timestamp)
+        }
+        saveHistory()
+    }
+
+    func saveHistory() {
         if let data = try? JSONEncoder().encode(history) {
             UserDefaults.standard.set(data, forKey: "clipboardHistory")
         }
@@ -46,6 +58,21 @@ class ClipboardManager: ObservableObject {
 
         clipboardObserver = pasteboard.changeCount
 
+        // 检查是否有文件路径（复制文件）
+        if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: nil) as? [URL],
+           !urls.isEmpty {
+            // 检查是否与上次添加的文件相同
+            let fileURL = urls.first!
+            if fileURL == lastFileURL {
+                return
+            }
+            addToHistory(fileURL: fileURL)
+            lastFileURL = fileURL
+            lastText = nil
+            lastImageData = nil
+            return
+        }
+
         if let string = pasteboard.string(forType: .string) {
             // 检查是否与上次添加的文本相同
             if string == lastText {
@@ -54,6 +81,7 @@ class ClipboardManager: ObservableObject {
             addToHistory(text: string)
             lastText = string
             lastImageData = nil
+            lastFileURL = nil
         } else if let image = pasteboard.readObjects(forClasses: [NSImage.self], options: nil)?.first as? NSImage {
             let imageData = image.tiffRepresentation
             // 检查是否与上次添加的图片相同
@@ -63,6 +91,7 @@ class ClipboardManager: ObservableObject {
             addToHistory(image: image)
             lastImageData = imageData
             lastText = nil
+            lastFileURL = nil
         }
     }
 
@@ -73,11 +102,6 @@ class ClipboardManager: ObservableObject {
 
         let item = HistoryItem(text: text)
         history.insert(item, at: 0)
-
-        if history.count > maxHistoryCount {
-            history.removeLast()
-        }
-
         saveHistory()
     }
 
@@ -90,11 +114,17 @@ class ClipboardManager: ObservableObject {
 
         let item = HistoryItem(image: image)
         history.insert(item, at: 0)
+        saveHistory()
+    }
 
-        if history.count > maxHistoryCount {
-            history.removeLast()
+    private func addToHistory(fileURL: URL) {
+        if let firstItem = history.first, firstItem.contentType == .file,
+           let firstFileURL = firstItem.fileURL, firstFileURL == fileURL.absoluteString {
+            return
         }
 
+        let item = HistoryItem(fileURL: fileURL)
+        history.insert(item, at: 0)
         saveHistory()
     }
 
@@ -112,10 +142,17 @@ class ClipboardManager: ObservableObject {
                 strongSelf.pasteboard.setString(text, forType: .string)
                 strongSelf.lastText = text
                 strongSelf.lastImageData = nil
+                strongSelf.lastFileURL = nil
             } else if item.contentType == .image, let image = item.image {
                 strongSelf.pasteboard.writeObjects([image])
                 strongSelf.lastImageData = image.tiffRepresentation
                 strongSelf.lastText = nil
+                strongSelf.lastFileURL = nil
+            } else if item.contentType == .file, let fileURLString = item.fileURL, let fileURL = URL(string: fileURLString) {
+                strongSelf.pasteboard.writeObjects([fileURL as NSURL])
+                strongSelf.lastFileURL = fileURL
+                strongSelf.lastText = nil
+                strongSelf.lastImageData = nil
             }
         }
     }
