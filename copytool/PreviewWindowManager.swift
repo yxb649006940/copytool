@@ -98,8 +98,10 @@ class PreviewWindowManager {
 
         previewWindow = window
 
-        positionWindow(window)
-        window.orderFront(nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            self?.positionWindow(window)
+            window.orderFront(nil)
+        }
     }
 
     private func positionWindow(_ window: NSWindow) {
