@@ -6,11 +6,14 @@ class PreviewWindowManager {
 
     private var previewWindow: NSWindow?
     private var hideTimer: Timer?
+    private var showTask: DispatchWorkItem?
+    private var currentItemId: UUID?
 
     private init() {}
 
     func showPreview(for item: HistoryItem) {
-        print("showPreview called for item type: \(item.contentType), fileName: \(item.fileName ?? "nil")")
+        // 取消正在进行的显示任务
+        showTask?.cancel()
 
         // 检查是否是图片或文本类型，或者是图片格式的文件
         let shouldShowPreview = item.contentType == .text ||
@@ -22,12 +25,23 @@ class PreviewWindowManager {
             return
         }
 
+        // 记录当前要显示的项目ID
+        currentItemId = item.id
+
         hideTimer?.invalidate()
         hideTimer = nil
 
-        DispatchQueue.main.async { [weak self] in
-            self?.createOrUpdatePreviewWindow(with: item)
+        // 创建新的显示任务
+        let task = DispatchWorkItem { [weak self] in
+            // 检查任务是否已取消或当前要显示的项目已更改
+            guard let self = self, self.currentItemId == item.id else {
+                return
+            }
+            self.createOrUpdatePreviewWindow(with: item)
         }
+
+        showTask = task
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: task)
     }
 
     private func isImageFileItem(_ item: HistoryItem) -> Bool {
@@ -40,8 +54,14 @@ class PreviewWindowManager {
     }
 
     func hidePreview() {
+        // 取消正在进行的显示任务
+        showTask?.cancel()
+        showTask = nil
+
         hideTimer?.invalidate()
         hideTimer = nil
+        currentItemId = nil
+
         DispatchQueue.main.async { [weak self] in
             self?.previewWindow?.orderOut(nil)
         }
@@ -78,10 +98,8 @@ class PreviewWindowManager {
 
         previewWindow = window
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-            self?.positionWindow(window)
-            window.orderFront(nil)
-        }
+        positionWindow(window)
+        window.orderFront(nil)
     }
 
     private func positionWindow(_ window: NSWindow) {

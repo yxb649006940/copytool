@@ -148,6 +148,12 @@ struct ContentView: View {
                     }
                     .padding(.bottom, 8)
                 }
+                .onHover { isHovered in
+                    // 当鼠标离开整个列表区域时，确保预览窗口关闭
+                    if !isHovered {
+                        hoverItem = nil
+                    }
+                }
             }
         }
     }
