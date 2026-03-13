@@ -4,6 +4,7 @@ struct ContentView: View {
     @ObservedObject private var clipboardManager = ClipboardManager.shared
     @State private var searchText = ""
     @State private var selectedIndex: Int?
+    @State private var hoverItem: HistoryItem?
 
     var filteredHistory: [HistoryItem] {
         if searchText.isEmpty {
@@ -35,6 +36,13 @@ struct ContentView: View {
         }
         .frame(width: 400, height: 500)
         .background(Color(NSColor.windowBackgroundColor))
+        .onChange(of: hoverItem) { _, newItem in
+            if let item = newItem {
+                PreviewWindowManager.shared.showPreview(for: item)
+            } else {
+                PreviewWindowManager.shared.hidePreview()
+            }
+        }
     }
 
     private func showSettingsWindow() {
@@ -130,6 +138,9 @@ struct ContentView: View {
                                     isSelected: selectedIndex == originalIndex,
                                     onSelect: {
                                         selectedIndex = originalIndex
+                                    },
+                                    onHover: { hoverItem in
+                                        self.hoverItem = hoverItem
                                     }
                                 )
                             }
@@ -204,6 +215,7 @@ struct HistoryItemView: View {
     let index: Int
     let isSelected: Bool
     let onSelect: () -> Void
+    let onHover: (HistoryItem?) -> Void
     @ObservedObject private var clipboardManager = ClipboardManager.shared
 
     var body: some View {
@@ -231,8 +243,10 @@ struct HistoryItemView: View {
             .onHover { isHovered in
                 if isHovered {
                     NSCursor.pointingHand.push()
+                    onHover(item)
                 } else {
                     NSCursor.pop()
+                    onHover(nil)
                 }
             }
         }

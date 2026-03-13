@@ -5,7 +5,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     static var shared: AppDelegate!
 
     var statusItem: NSStatusItem?
-    var popover: NSPopover?
+    private(set) var popover: NSPopover?
     var eventMonitors: [Any] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {

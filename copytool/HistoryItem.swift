@@ -7,7 +7,7 @@ enum ContentType: String, Codable {
     case file
 }
 
-struct HistoryItem: Identifiable, Codable {
+struct HistoryItem: Identifiable, Codable, Equatable {
     let id: UUID
     let contentType: ContentType
     let textContent: String?
