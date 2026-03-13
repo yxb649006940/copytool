@@ -36,7 +36,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         if let button = statusItem?.button {
-            button.image = NSImage(systemSymbolName: "clipboard", accessibilityDescription: "剪贴板历史")
+            // 尝试使用自定义图标，如果失败则回退到系统图标
+            if let customImage = NSImage(named: "MenuBarIcon") {
+                customImage.isTemplate = true  // 模板模式，自动适配深色/浅色模式
+                customImage.size = NSSize(width: 18, height: 18)
+                button.image = customImage
+            } else {
+                button.image = NSImage(systemSymbolName: "clipboard", accessibilityDescription: "剪贴板历史")
+            }
             button.action = #selector(handleStatusItemClick)
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
