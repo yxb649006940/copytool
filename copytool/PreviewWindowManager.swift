@@ -41,10 +41,9 @@ class PreviewWindowManager {
 
     func hidePreview() {
         hideTimer?.invalidate()
-        hideTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: false) { [weak self] _ in
-            DispatchQueue.main.async {
-                self?.previewWindow?.orderOut(nil)
-            }
+        hideTimer = nil
+        DispatchQueue.main.async { [weak self] in
+            self?.previewWindow?.orderOut(nil)
         }
     }
 

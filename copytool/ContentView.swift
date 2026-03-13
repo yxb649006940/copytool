@@ -239,6 +239,9 @@ struct HistoryItemView: View {
             .onTapGesture {
                 onSelect()
                 clipboardManager.copyToClipboard(item: item)
+                // 立即关闭预览窗口
+                onHover(nil)
+                PreviewWindowManager.shared.hidePreview()
             }
             .onHover { isHovered in
                 if isHovered {
