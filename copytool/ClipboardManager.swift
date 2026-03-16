@@ -2,24 +2,36 @@ import SwiftUI
 import Combine
 import Cocoa
 
+/// 剪贴板管理器
+/// 负责监听剪贴板变化、管理剪贴板历史记录
 class ClipboardManager: ObservableObject {
-    @Published var history: [HistoryItem] = []
-    private var clipboardObserver: Int?
-    private let pasteboard = NSPasteboard.general
+    @Published var history: [HistoryItem] = []  // 剪贴板历史记录
+    private var clipboardObserver: Int?          // 剪贴板变化计数器
+    private let pasteboard = NSPasteboard.general  // 系统剪贴板
 
     // 保存最后添加的内容，避免重复添加
     private var lastText: String?
     private var lastImageData: Data?
     private var lastFileURL: URL?
 
-    static let shared = ClipboardManager()
+    static let shared = ClipboardManager()  // 单例实例
 
     private init() {
         loadHistory()
         setupClipboardObserver()
+        setupExpirationTimer() // 设置定期清理定时器
         cleanExpiredItems() // 加载时清理过期记录
     }
 
+    /// 设置定期清理过期记录的定时器
+    private func setupExpirationTimer() {
+        // 每小时清理一次过期记录
+        Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
+            self?.cleanExpiredItems()
+        }
+    }
+
+    /// 加载历史记录
     private func loadHistory() {
         if let data = UserDefaults.standard.data(forKey: "clipboardHistory"),
            let items = try? JSONDecoder().decode([HistoryItem].self, from: data) {
@@ -29,7 +41,7 @@ class ClipboardManager: ObservableObject {
         }
     }
 
-    // 清理过期的历史记录
+    /// 清理过期的历史记录
     func cleanExpiredItems() {
         let settings = SettingsManager.shared
         history.removeAll { item in
@@ -38,12 +50,14 @@ class ClipboardManager: ObservableObject {
         saveHistory()
     }
 
+    /// 保存历史记录到本地存储
     func saveHistory() {
         if let data = try? JSONEncoder().encode(history) {
             UserDefaults.standard.set(data, forKey: "clipboardHistory")
         }
     }
 
+    /// 设置剪贴板监听器
     private func setupClipboardObserver() {
         clipboardObserver = pasteboard.changeCount
         Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
@@ -51,6 +65,7 @@ class ClipboardManager: ObservableObject {
         }
     }
 
+    /// 检查剪贴板内容变化
     private func checkClipboard() {
         guard let currentCount = clipboardObserver, pasteboard.changeCount != currentCount else {
             return

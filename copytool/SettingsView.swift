@@ -392,6 +392,9 @@ struct SettingsView: View {
                 settings.storageDuration = selectedStorageDuration
                 settings.hotkey = selectedHotkey
 
+                // 保存设置后立即清理过期记录
+                ClipboardManager.shared.cleanExpiredItems()
+
                 NotificationCenter.default.post(name: NSNotification.Name("SettingsChanged"), object: nil)
                 onClose?()
             }) {

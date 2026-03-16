@@ -1,12 +1,14 @@
 import SwiftUI
 import Cocoa
 
+/// 应用程序代理类
+/// 负责应用程序的生命周期管理、菜单栏设置、快捷键监听等
 class AppDelegate: NSObject, NSApplicationDelegate {
     static var shared: AppDelegate!
 
-    var statusItem: NSStatusItem?
-    private(set) var popover: NSPopover?
-    var eventMonitors: [Any] = []
+    var statusItem: NSStatusItem?          // 菜单栏状态项
+    private(set) var popover: NSPopover? // 弹出窗口
+    var eventMonitors: [Any] = []         // 事件监听器数组
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppDelegate.shared = self
@@ -22,7 +24,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NotificationCenter.default.addObserver(self, selector: #selector(openSettingsFromPopover), name: NSNotification.Name("OpenSettings"), object: nil)
     }
 
-    // 检查并清理过大的历史记录
+    /// 检查并清理过大的历史记录
     private func checkAndCleanupLargeHistory() {
         if let data = UserDefaults.standard.data(forKey: "clipboardHistory") {
             if data.count >= 4 * 1024 * 1024 { // >=4MB
@@ -32,6 +34,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// 设置菜单栏
     private func setupStatusBar() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
@@ -49,6 +52,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// 处理菜单栏点击事件
     @objc private func handleStatusItemClick(_ sender: NSStatusBarButton) {
         if let event = NSApp.currentEvent {
             if event.type == .rightMouseUp || event.modifierFlags.contains(.control) {
@@ -59,6 +63,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// 显示右键菜单
     private func showMenu() {
         let menu = NSMenu()
         menu.addItem(withTitle: "显示历史记录", action: #selector(togglePanel), keyEquivalent: "h")
@@ -72,6 +77,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem?.menu = nil
     }
 
+    /// 设置弹出窗口
     private func setupPopover() {
         popover = NSPopover()
         popover?.contentSize = NSSize(width: 400, height: 500)
@@ -79,12 +85,40 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         popover?.contentViewController = NSHostingController(rootView: ContentView())
     }
 
+    /// 请求辅助功能权限
     private func requestAccessibilityPermission() {
         let options: NSDictionary = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
         let accessibilityEnabled = AXIsProcessTrustedWithOptions(options)
         print("辅助功能权限: \(accessibilityEnabled ? "已授予" : "未授予")")
+
+        // 如果权限未授予，设置定时检查
+        if !accessibilityEnabled {
+            setupPermissionCheckTimer()
+        }
     }
 
+    /// 设置权限检查定时器
+    private func setupPermissionCheckTimer() {
+        // 每2秒检查一次权限
+        Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] timer in
+            guard let strongSelf = self else {
+                timer.invalidate()
+                return
+            }
+
+            let accessibilityEnabled = AXIsProcessTrusted()
+            print("检查辅助功能权限: \(accessibilityEnabled ? "已授予" : "未授予")")
+
+            if accessibilityEnabled {
+                // 权限已授予，停止定时器并重新设置键盘监控器
+                timer.invalidate()
+                print("权限已授予，重新设置键盘监控器")
+                strongSelf.setupGlobalKeyboardMonitor()
+            }
+        }
+    }
+
+    /// 设置全局键盘监听器
     func setupGlobalKeyboardMonitor() {
         // 移除旧的监听
         eventMonitors.forEach { NSEvent.removeMonitor($0) }
@@ -106,6 +140,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// 处理键盘按下事件
     private func handleKeyDown(_ event: NSEvent) {
         let settings = SettingsManager.shared
         let hotkey = settings.hotkey
@@ -122,6 +157,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// 显示设置窗口
     @objc private func showSettings() {
         DispatchQueue.main.async {
             // 先关闭 popover
@@ -159,6 +195,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// 切换弹出窗口的显示/隐藏
     @objc func togglePanel() {
         guard let popover = popover, let button = statusItem?.button else { return }
 
@@ -174,10 +211,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// 处理设置更改事件
     @objc private func settingsChanged() {
         setupGlobalKeyboardMonitor()
     }
 
+    /// 从弹出窗口中打开设置
     @objc private func openSettingsFromPopover() {
         DispatchQueue.main.async {
             self.popover?.performClose(nil)

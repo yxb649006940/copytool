@@ -36,6 +36,10 @@ struct ContentView: View {
         }
         .frame(width: 400, height: 500)
         .background(Color(NSColor.windowBackgroundColor))
+        .onAppear {
+            // 打开面板时清理过期记录
+            clipboardManager.cleanExpiredItems()
+        }
         .onChange(of: hoverItem) { _, newItem in
             if let item = newItem {
                 PreviewWindowManager.shared.showPreview(for: item)

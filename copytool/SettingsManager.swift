@@ -2,13 +2,14 @@ import Foundation
 import Cocoa
 import ServiceManagement
 
-// 存储时间选项
+/// 存储时间选项枚举
 enum StorageDuration: String, Codable, CaseIterable {
     case oneDay = "1天"
     case sevenDays = "7天"
     case oneMonth = "1个月"
     case forever = "永久"
 
+    /// 获取存储时间的天数
     var days: TimeInterval? {
         switch self {
         case .oneDay:
@@ -23,11 +24,12 @@ enum StorageDuration: String, Codable, CaseIterable {
     }
 }
 
-// 快捷键配置
+/// 快捷键配置结构体
 struct HotkeyConfiguration: Codable {
     let keyCode: UInt16
     let modifiers: UInt // 存储修饰符的原始值
 
+    /// 获取显示字符串（如 "Cmd + Opt + V"）
     var displayString: String {
         let modifiers = NSEvent.ModifierFlags(rawValue: modifiers)
         var parts: [String] = []
@@ -52,15 +54,23 @@ struct HotkeyConfiguration: Codable {
         return parts.joined(separator: " + ")
     }
 
+    /// 获取修饰符标志
     var modifierFlags: NSEvent.ModifierFlags {
         return NSEvent.ModifierFlags(rawValue: modifiers)
     }
 
+    /// 初始化方法
+    /// - Parameters:
+    ///   - keyCode: 键码
+    ///   - modifiers: 修饰符
     init(keyCode: UInt16, modifiers: NSEvent.ModifierFlags) {
         self.keyCode = keyCode
         self.modifiers = modifiers.rawValue
     }
 
+    /// 键码到字符的转换
+    /// - Parameter keyCode: 键码
+    /// - Returns: 对应的字符
     private func keyCodeToCharacter(_ keyCode: UInt16) -> String {
         let keyMap: [UInt16: String] = [
             0: "a", 1: "s", 2: "d", 3: "f", 4: "h", 5: "g", 6: "z", 7: "x", 8: "c", 9: "v",
@@ -73,15 +83,20 @@ struct HotkeyConfiguration: Codable {
     }
 }
 
+/// 设置管理器
 class SettingsManager {
-    static let shared = SettingsManager()
+    static let shared = SettingsManager() // 单例实例
 
     private let storageDurationKey = "storageDuration"
     private let hotkeyKey = "hotkeyConfiguration"
     private let launchAtLoginKey = "launchAtLogin"
 
-    private init() {}
+    private init() {
+        // 初始化时同步开机启动设置
+        syncLoginItemSetting()
+    }
 
+    /// 存储持续时间设置
     var storageDuration: StorageDuration {
         get {
             if let savedDuration = UserDefaults.standard.string(forKey: storageDurationKey),
@@ -95,6 +110,7 @@ class SettingsManager {
         }
     }
 
+    /// 快捷键配置
     var hotkey: HotkeyConfiguration {
         get {
             if let data = UserDefaults.standard.data(forKey: hotkeyKey),
@@ -110,9 +126,24 @@ class SettingsManager {
         }
     }
 
+    /// 开机启动设置
     var launchAtLogin: Bool {
         get {
-            return UserDefaults.standard.bool(forKey: launchAtLoginKey)
+            if #available(macOS 13.0, *) {
+                let service = SMAppService.mainApp
+                let isEnabled = service.status == .enabled
+                let userDefaultValue = UserDefaults.standard.bool(forKey: launchAtLoginKey)
+
+                // 如果系统状态与 UserDefaults 不一致，同步到系统状态
+                if isEnabled != userDefaultValue {
+                    print("Login item status mismatch - system: \(isEnabled), userDefault: \(userDefaultValue), syncing to system state")
+                    UserDefaults.standard.set(isEnabled, forKey: launchAtLoginKey)
+                }
+
+                return isEnabled
+            } else {
+                return UserDefaults.standard.bool(forKey: launchAtLoginKey)
+            }
         }
         set {
             UserDefaults.standard.set(newValue, forKey: launchAtLoginKey)
@@ -120,10 +151,57 @@ class SettingsManager {
         }
     }
 
-    // 应用开机启动设置
+    /// 检查应用是否在 Applications 文件夹中（macOS 13+ 的 SMAppService 要求）
+    private func isAppInApplicationsFolder() -> Bool {
+        let appPath = Bundle.main.bundlePath
+        let applicationsPaths = [
+            "/Applications",
+            NSString(string: "~/Applications").expandingTildeInPath
+        ]
+        for applicationsPath in applicationsPaths {
+            if appPath.hasPrefix(applicationsPath) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// 同步开机启动设置（确保 UserDefaults 与系统状态一致）
+    private func syncLoginItemSetting() {
+        let mainBundle = Bundle.main
+        guard let bundleIdentifier = mainBundle.bundleIdentifier else {
+            print("Failed to get bundle identifier for login item sync")
+            return
+        }
+
+        if #available(macOS 13.0, *) {
+            let service = SMAppService.mainApp
+            let isEnabled = service.status == .enabled
+            let userDefaultValue = UserDefaults.standard.bool(forKey: launchAtLoginKey)
+
+            print("Login item status - system: \(isEnabled), userDefault: \(userDefaultValue), inApplicationsFolder: \(isAppInApplicationsFolder())")
+
+            // 如果系统状态与 UserDefaults 不一致，强制同步
+            if isEnabled != userDefaultValue {
+                print("Syncing login item setting...")
+                applyLoginItemSetting(userDefaultValue)
+            }
+        } else {
+            // 旧版本 API 的同步逻辑
+            let currentState = SMLoginItemSetEnabled(bundleIdentifier as CFString, false)
+            let shouldBeEnabled = UserDefaults.standard.bool(forKey: launchAtLoginKey)
+
+            print("Login item status (old API) - current: \(currentState), shouldBe: \(shouldBeEnabled)")
+
+            SMLoginItemSetEnabled(bundleIdentifier as CFString, shouldBeEnabled)
+        }
+    }
+
+    /// 应用开机启动设置
     private func applyLoginItemSetting(_ enabled: Bool) {
         let mainBundle = Bundle.main
         guard let bundleIdentifier = mainBundle.bundleIdentifier else {
+            print("Failed to get bundle identifier")
             return
         }
 
@@ -132,23 +210,36 @@ class SettingsManager {
             let service = SMAppService.mainApp
             do {
                 if enabled {
-                    try service.register()
+                    if service.status != .enabled {
+                        try service.register()
+                        print("Successfully registered login item")
+                    } else {
+                        print("Login item already registered")
+                    }
                 } else {
-                    try service.unregister()
+                    if service.status == .enabled {
+                        try service.unregister()
+                        print("Successfully unregistered login item")
+                    } else {
+                        print("Login item already unregistered")
+                    }
                 }
             } catch {
-                print("Failed to set login item: \(error)")
+                print("Failed to set login item with SMAppService: \(error)")
+                // 如果现代 API 失败，尝试使用旧 API（如果可用）
+                if #unavailable(macOS 13.0) {
+                    let success = SMLoginItemSetEnabled(bundleIdentifier as CFString, enabled)
+                    print("Fallback to SMLoginItemSetEnabled: \(success ? "Success" : "Failed")")
+                }
             }
         } else {
             // 使用旧的 API 保持向后兼容
             let success = SMLoginItemSetEnabled(bundleIdentifier as CFString, enabled)
-            if !success {
-                print("Failed to set login item")
-            }
+            print("SMLoginItemSetEnabled: \(success ? "Success" : "Failed") - \(enabled ? "Enabled" : "Disabled")")
         }
     }
 
-    // 检查历史项目是否过期
+    /// 检查历史项目是否过期
     func isItemExpired(timestamp: Date) -> Bool {
         guard let duration = storageDuration.days else {
             return false // 永久存储

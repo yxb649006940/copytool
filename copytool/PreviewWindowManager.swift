@@ -1,16 +1,20 @@
 import SwiftUI
 import Cocoa
 
+/// 预览窗口管理器
+/// 负责管理剪贴板内容的预览窗口显示和隐藏
 class PreviewWindowManager {
-    static let shared = PreviewWindowManager()
+    static let shared = PreviewWindowManager()  // 单例实例
 
-    private var previewWindow: NSWindow?
-    private var hideTimer: Timer?
-    private var showTask: DispatchWorkItem?
-    private var currentItemId: UUID?
+    private var previewWindow: NSWindow?         // 预览窗口
+    private var hideTimer: Timer?                // 隐藏定时器
+    private var showTask: DispatchWorkItem?      // 显示任务
+    private var currentItemId: UUID?             // 当前正在显示的项目ID
 
     private init() {}
 
+    /// 显示预览窗口
+    /// - Parameter item: 要预览的历史项目
     func showPreview(for item: HistoryItem) {
         // 取消正在进行的显示任务
         showTask?.cancel()
@@ -44,6 +48,9 @@ class PreviewWindowManager {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: task)
     }
 
+    /// 检查是否是图片文件类型
+    /// - Parameter item: 历史项目
+    /// - Returns: 是否是图片文件类型
     private func isImageFileItem(_ item: HistoryItem) -> Bool {
         guard item.contentType == .file, let fileName = item.fileName else {
             return false
@@ -53,6 +60,7 @@ class PreviewWindowManager {
         return imageExtensions.contains(fileExtension)
     }
 
+    /// 隐藏预览窗口
     func hidePreview() {
         // 取消正在进行的显示任务
         showTask?.cancel()
@@ -67,6 +75,8 @@ class PreviewWindowManager {
         }
     }
 
+    /// 创建或更新预览窗口
+    /// - Parameter item: 要预览的历史项目
     private func createOrUpdatePreviewWindow(with item: HistoryItem) {
         if let existingWindow = previewWindow, existingWindow.isVisible {
             if let hostingController = existingWindow.contentViewController as? NSHostingController<ContentPreviewView> {
@@ -104,6 +114,8 @@ class PreviewWindowManager {
         }
     }
 
+    /// 定位预览窗口
+    /// - Parameter window: 要定位的窗口
     private func positionWindow(_ window: NSWindow) {
         let mouseLocation = NSEvent.mouseLocation
         let previewSize = window.frame.size
@@ -145,8 +157,10 @@ class PreviewWindowManager {
     }
 }
 
+/// 内容预览视图
+/// 用于显示剪贴板内容的预览，支持文本和图片类型
 struct ContentPreviewView: View {
-    let item: HistoryItem
+    let item: HistoryItem  // 要预览的项目
 
     var body: some View {
         if item.contentType == .image || isImageFileItem() {
@@ -184,6 +198,8 @@ struct ContentPreviewView: View {
         }
     }
 
+    /// 检查是否是图片文件类型
+    /// - Returns: 是否是图片文件类型
     private func isImageFileItem() -> Bool {
         guard item.contentType == .file, let fileName = item.fileName else {
             return false
@@ -193,6 +209,8 @@ struct ContentPreviewView: View {
         return imageExtensions.contains(fileExtension)
     }
 
+    /// 获取图片对象
+    /// - Returns: 可选的图片对象
     private var image: NSImage? {
         if item.contentType == .image {
             return item.image
@@ -202,6 +220,7 @@ struct ContentPreviewView: View {
         return nil
     }
 
+    /// 图片预览视图
     @ViewBuilder
     private var imagePreview: some View {
         if let image = self.image {
@@ -217,6 +236,7 @@ struct ContentPreviewView: View {
         }
     }
 
+    /// 文本预览视图
     @ViewBuilder
     private var textPreview: some View {
         VStack(alignment: .leading, spacing: 0) {
