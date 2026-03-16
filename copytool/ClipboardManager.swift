@@ -137,7 +137,12 @@ class ClipboardManager: ObservableObject {
             return
         }
 
-        let item = HistoryItem(text: text)
+        // 限制文本长度，防止处理过大文本导致崩溃
+        // 建议最大文本长度限制在 100KB 左右（约 50,000 个字符）
+        let maxTextLength = 50000
+        let limitedText = text.count > maxTextLength ? String(text.prefix(maxTextLength)) + "..." : text
+
+        let item = HistoryItem(text: limitedText)
         history.insert(item, at: 0)
         saveHistory()
     }
