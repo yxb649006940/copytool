@@ -33,11 +33,42 @@ class ClipboardManager: ObservableObject {
 
     /// 加载历史记录
     private func loadHistory() {
-        if let data = UserDefaults.standard.data(forKey: "clipboardHistory"),
-           let items = try? JSONDecoder().decode([HistoryItem].self, from: data) {
-            // 过滤掉过期的记录
-            let settings = SettingsManager.shared
-            self.history = items.filter { !settings.isItemExpired(timestamp: $0.timestamp) }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+
+            var loadedItems: [HistoryItem]?
+
+            // 先尝试从文件加载（更好的性能）
+            do {
+                let fileManager = FileManager.default
+                let appSupportDirectory = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+                let appDirectory = appSupportDirectory.appendingPathComponent("com.yxb10.copytool")
+                let historyFileURL = appDirectory.appendingPathComponent("clipboardHistory.json")
+
+                if fileManager.fileExists(atPath: historyFileURL.path) {
+                    let data = try Data(contentsOf: historyFileURL)
+                    loadedItems = try JSONDecoder().decode([HistoryItem].self, from: data)
+                }
+            } catch {
+                print("从文件加载历史记录失败: \(error)")
+            }
+
+            // 如果文件加载失败，使用UserDefaults
+            if loadedItems == nil {
+                if let data = UserDefaults.standard.data(forKey: "clipboardHistory"),
+                   let items = try? JSONDecoder().decode([HistoryItem].self, from: data) {
+                    loadedItems = items
+                }
+            }
+
+            // 在主线程更新UI
+            DispatchQueue.main.async {
+                if let items = loadedItems {
+                    // 过滤掉过期的记录
+                    let settings = SettingsManager.shared
+                    self.history = items.filter { !settings.isItemExpired(timestamp: $0.timestamp) }
+                }
+            }
         }
     }
 
@@ -47,13 +78,22 @@ class ClipboardManager: ObservableObject {
         history.removeAll { item in
             return settings.isItemExpired(timestamp: item.timestamp)
         }
-        saveHistory()
+        // 使用异步保存避免阻塞主线程
+        DispatchQueue.global(qos: .background).async { [weak self] in
+            self?.saveHistory()
+        }
     }
 
-    /// 保存历史记录到本地存储
+    /// 保存历史记录到本地存储（异步）
     func saveHistory() {
-        if let data = try? JSONEncoder().encode(history) {
-            UserDefaults.standard.set(data, forKey: "clipboardHistory")
+        DispatchQueue.global(qos: .background).async { [weak self] in
+            guard let self = self else { return }
+
+            if let data = try? JSONEncoder().encode(self.history) {
+                DispatchQueue.main.async {
+                    UserDefaults.standard.set(data, forKey: "clipboardHistory")
+                }
+            }
         }
     }
 
@@ -137,14 +177,12 @@ class ClipboardManager: ObservableObject {
             return
         }
 
-        // 限制文本长度，防止处理过大文本导致崩溃
-        // 建议最大文本长度限制在 100KB 左右（约 50,000 个字符）
-        let maxTextLength = 50000
-        let limitedText = text.count > maxTextLength ? String(text.prefix(maxTextLength)) + "..." : text
-
-        let item = HistoryItem(text: limitedText)
+        let item = HistoryItem(text: text)
         history.insert(item, at: 0)
-        saveHistory()
+        // 使用异步保存避免阻塞主线程
+        DispatchQueue.global(qos: .background).async { [weak self] in
+            self?.saveHistory()
+        }
     }
 
     private func addToHistory(image: NSImage) {
@@ -156,7 +194,10 @@ class ClipboardManager: ObservableObject {
 
         let item = HistoryItem(image: image)
         history.insert(item, at: 0)
-        saveHistory()
+        // 使用异步保存避免阻塞主线程
+        DispatchQueue.global(qos: .background).async { [weak self] in
+            self?.saveHistory()
+        }
     }
 
     private func addToHistory(fileURL: URL) {
@@ -167,7 +208,10 @@ class ClipboardManager: ObservableObject {
 
         let item = HistoryItem(fileURL: fileURL)
         history.insert(item, at: 0)
-        saveHistory()
+        // 使用异步保存避免阻塞主线程
+        DispatchQueue.global(qos: .background).async { [weak self] in
+            self?.saveHistory()
+        }
     }
 
     func copyToClipboard(item: HistoryItem) {
@@ -201,11 +245,17 @@ class ClipboardManager: ObservableObject {
 
     func removeItem(at index: Int) {
         history.remove(at: index)
-        saveHistory()
+        // 使用异步保存避免阻塞主线程
+        DispatchQueue.global(qos: .background).async { [weak self] in
+            self?.saveHistory()
+        }
     }
 
     func clearAll() {
         history.removeAll()
-        saveHistory()
+        // 使用异步保存避免阻塞主线程
+        DispatchQueue.global(qos: .background).async { [weak self] in
+            self?.saveHistory()
+        }
     }
 }

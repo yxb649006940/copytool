@@ -247,6 +247,12 @@ struct ContentPreviewView: View {
                     .font(.headline)
                     .foregroundColor(.primary)
                 Spacer()
+                // 显示文本长度信息
+                if let text = item.textContent {
+                    Text("\(text.count) 字符")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
@@ -256,7 +262,9 @@ struct ContentPreviewView: View {
 
             if let text = item.textContent {
                 ScrollView {
-                    Text(text)
+                    // 对于非常大的文本，只显示一部分并提示用户
+                    let displayText = text.count > 5000 ? String(text.prefix(5000)) + "\n\n... (文本过长，仅显示前 5000 字符，点击条目可复制完整内容)" : text
+                    Text(displayText)
                         .font(.system(size: 13))
                         .foregroundColor(.primary)
                         .frame(maxWidth: .infinity, alignment: .leading)
