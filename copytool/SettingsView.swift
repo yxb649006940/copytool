@@ -1,14 +1,18 @@
 import SwiftUI
 import Cocoa
 
+/// 设置界面视图
+/// 提供用户配置应用程序行为和外观的界面
 struct SettingsView: View {
-    var onClose: (() -> Void)?
-    @State private var selectedStorageDuration: StorageDuration
-    @State private var selectedHotkey: HotkeyConfiguration
-    @State private var isRecordingHotkey = false
-    @State private var hotkeyMonitor: Any?
-    @State private var launchAtLogin: Bool
+    var onClose: (() -> Void)?                          // 关闭回调
+    @State private var selectedStorageDuration: StorageDuration  // 选中的存储持续时间
+    @State private var selectedHotkey: HotkeyConfiguration        // 选中的快捷键配置
+    @State private var isRecordingHotkey = false         // 是否正在录制快捷键
+    @State private var hotkeyMonitor: Any?               // 快捷键监听器
+    @State private var launchAtLogin: Bool               // 是否开机启动
 
+    /// 初始化方法
+    /// - Parameter onClose: 关闭回调
     init(onClose: (() -> Void)? = nil) {
         self.onClose = onClose
         let settings = SettingsManager.shared
