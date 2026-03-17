@@ -218,6 +218,9 @@ class ClipboardManager: ObservableObject {
         // 先关闭 popover
         NSApp.sendAction(#selector(AppDelegate.togglePanel), to: nil, from: nil)
 
+        // 立即隐藏预览窗口
+        PreviewWindowManager.shared.hidePreview()
+
         // 延迟一小段时间后复制内容
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
             guard let strongSelf = self else { return }

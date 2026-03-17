@@ -16,6 +16,12 @@ class PreviewWindowManager {
     /// 显示预览窗口
     /// - Parameter item: 要预览的历史项目
     func showPreview(for item: HistoryItem) {
+        // 检查 popover 是否可见，如果不可见则不显示预览
+        guard let popover = AppDelegate.shared.popover, popover.isShown else {
+            hidePreview()
+            return
+        }
+
         // 取消正在进行的显示任务
         showTask?.cancel()
 
@@ -37,8 +43,11 @@ class PreviewWindowManager {
 
         // 创建新的显示任务
         let task = DispatchWorkItem { [weak self] in
-            // 检查任务是否已取消或当前要显示的项目已更改
-            guard let self = self, self.currentItemId == item.id else {
+            // 检查任务是否已取消、当前要显示的项目已更改、或者popover已关闭
+            guard let self = self,
+                  self.currentItemId == item.id,
+                  let popover = AppDelegate.shared.popover,
+                  popover.isShown else {
                 return
             }
             self.createOrUpdatePreviewWindow(with: item)

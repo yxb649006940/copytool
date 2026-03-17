@@ -200,6 +200,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard let popover = popover, let button = statusItem?.button else { return }
 
         if popover.isShown {
+            // 确保预览窗口也被隐藏
+            PreviewWindowManager.shared.hidePreview()
             popover.performClose(nil)
         } else {
             popover.contentViewController = NSHostingController(rootView: ContentView())
@@ -227,5 +229,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         eventMonitors.forEach { NSEvent.removeMonitor($0) }
         NotificationCenter.default.removeObserver(self)
+    }
+
+    func applicationDidResignActive(_ notification: Notification) {
+        // 应用程序失去焦点时，确保隐藏预览窗口
+        PreviewWindowManager.shared.hidePreview()
+    }
+
+    func applicationWillHide(_ notification: Notification) {
+        // 应用程序隐藏时，确保隐藏预览窗口
+        PreviewWindowManager.shared.hidePreview()
     }
 }
