@@ -215,14 +215,11 @@ class ClipboardManager: ObservableObject {
     }
 
     func copyToClipboard(item: HistoryItem) {
-        // 先关闭 popover
-        NSApp.sendAction(#selector(AppDelegate.togglePanel), to: nil, from: nil)
-
         // 立即隐藏预览窗口
         PreviewWindowManager.shared.hidePreview()
 
-        // 延迟一小段时间后复制内容
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+        // 直接复制内容，不关闭窗口
+        DispatchQueue.main.async { [weak self] in
             guard let strongSelf = self else { return }
 
             strongSelf.pasteboard.clearContents()

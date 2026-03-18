@@ -10,6 +10,7 @@ struct SettingsView: View {
     @State private var isRecordingHotkey = false         // 是否正在录制快捷键
     @State private var hotkeyMonitor: Any?               // 快捷键监听器
     @State private var launchAtLogin: Bool               // 是否开机启动
+    @State private var windowAlwaysOnTop: Bool            // 窗口是否置顶
 
     /// 初始化方法
     /// - Parameter onClose: 关闭回调
@@ -19,6 +20,7 @@ struct SettingsView: View {
         self._selectedStorageDuration = State(initialValue: settings.storageDuration)
         self._selectedHotkey = State(initialValue: settings.hotkey)
         self._launchAtLogin = State(initialValue: settings.launchAtLogin)
+        self._windowAlwaysOnTop = State(initialValue: settings.windowAlwaysOnTop)
     }
 
     var body: some View {
@@ -31,6 +33,7 @@ struct SettingsView: View {
                 VStack(spacing: 28) {
                     storageDurationSection
                     launchAtLoginSection
+                    windowBehaviorSection
                     hotkeySection
                 }
                 .padding(24)
@@ -180,6 +183,50 @@ struct SettingsView: View {
                 )
                 .onChange(of: launchAtLogin) {
                     SettingsManager.shared.launchAtLogin = launchAtLogin
+                }
+            }
+        }
+        .padding(.all, 16)
+        .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
+        .cornerRadius(16)
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
+        )
+    }
+
+    private var windowBehaviorSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            SectionHeader(title: "窗口行为", icon: "window")
+
+            VStack(spacing: 12) {
+                Toggle(isOn: $windowAlwaysOnTop) {
+                    HStack(spacing: 14) {
+                        Image(systemName: "arrow.up.to.line")
+                            .font(.system(size: 16))
+                            .foregroundColor(.blue)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("窗口置顶")
+                                .font(.system(size: 14))
+                                .fontWeight(.medium)
+                                .foregroundColor(.primary)
+                            Text("使应用程序窗口始终显示在最前面")
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
+                        }
+                        Spacer()
+                    }
+                }
+                .toggleStyle(SwitchToggleStyle())
+                .padding(16)
+                .background(Color(NSColor.controlBackgroundColor))
+                .cornerRadius(10)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
+                )
+                .onChange(of: windowAlwaysOnTop) {
+                    SettingsManager.shared.windowAlwaysOnTop = windowAlwaysOnTop
                 }
             }
         }
@@ -363,6 +410,7 @@ struct SettingsView: View {
             Button(action: {
                 selectedStorageDuration = .oneMonth
                 selectedHotkey = HotkeyConfiguration(keyCode: 9, modifiers: [.command, .option])
+                windowAlwaysOnTop = false
             }) {
                 HStack(spacing: 8) {
                     Image(systemName: "arrow.counterclockwise")

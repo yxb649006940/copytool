@@ -90,6 +90,7 @@ class SettingsManager {
     private let storageDurationKey = "storageDuration"
     private let hotkeyKey = "hotkeyConfiguration"
     private let launchAtLoginKey = "launchAtLogin"
+    private let windowAlwaysOnTopKey = "windowAlwaysOnTop"
 
     private init() {
         // 初始化时同步开机启动设置
@@ -123,6 +124,18 @@ class SettingsManager {
             if let data = try? JSONEncoder().encode(newValue) {
                 UserDefaults.standard.set(data, forKey: hotkeyKey)
             }
+        }
+    }
+
+    /// 窗口置顶设置
+    var windowAlwaysOnTop: Bool {
+        get {
+            return UserDefaults.standard.bool(forKey: windowAlwaysOnTopKey)
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: windowAlwaysOnTopKey)
+            // 通知更新窗口层级
+            NotificationCenter.default.post(name: NSNotification.Name("WindowAlwaysOnTopChanged"), object: nil)
         }
     }
 

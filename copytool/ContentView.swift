@@ -25,7 +25,6 @@ struct ContentView: View {
             Divider()
 
             historyListView
-                .padding(8)
 
             Divider()
 
@@ -34,7 +33,6 @@ struct ContentView: View {
                 .padding(.horizontal, 16)
                 .background(Color(NSColor.controlBackgroundColor))
         }
-        .frame(width: 400, height: 500)
         .background(Color(NSColor.windowBackgroundColor))
         .onAppear {
             // 打开面板时清理过期记录
@@ -131,27 +129,28 @@ struct ContentView: View {
                     searchEmptyStateView
                 }
             } else {
-                ScrollView {
-                    VStack(spacing: 8) {
-                        ForEach(Array(filteredHistory.enumerated()), id: \.element.id) { (filteredIndex, item) in
-                            // 找到原始索引
-                            if let originalIndex = clipboardManager.history.firstIndex(where: { $0.id == item.id }) {
-                                HistoryItemView(
-                                    item: item,
-                                    index: originalIndex,
-                                    isSelected: selectedIndex == originalIndex,
-                                    onSelect: {
-                                        selectedIndex = originalIndex
-                                    },
-                                    onHover: { hoverItem in
-                                        self.hoverItem = hoverItem
-                                    }
-                                )
-                            }
+                // 使用 List 替代 ScrollView + VStack，利用懒加载优化性能
+                List {
+                    ForEach(Array(filteredHistory.enumerated()), id: \.element.id) { (filteredIndex, item) in
+                        // 找到原始索引
+                        if let originalIndex = clipboardManager.history.firstIndex(where: { $0.id == item.id }) {
+                            HistoryItemView(
+                                item: item,
+                                index: originalIndex,
+                                isSelected: selectedIndex == originalIndex,
+                                onSelect: {
+                                    selectedIndex = originalIndex
+                                },
+                                onHover: { hoverItem in
+                                    self.hoverItem = hoverItem
+                                }
+                            )
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
                         }
                     }
-                    .padding(.bottom, 8)
                 }
+                .listStyle(.plain)
                 .onHover { isHovered in
                     // 当鼠标离开整个列表区域时，确保预览窗口关闭
                     if !isHovered {
@@ -229,38 +228,36 @@ struct HistoryItemView: View {
     @ObservedObject private var clipboardManager = ClipboardManager.shared
 
     var body: some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 12) {
-                contentPreview
+        HStack(spacing: 12) {
+            contentPreview
 
-                Spacer()
+            Spacer()
 
-                deleteButton
-            }
-            .padding(12)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(isSelected ? Color.blue.opacity(0.15) : Color(NSColor.textBackgroundColor))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(isSelected ? Color.blue : Color(NSColor.separatorColor), lineWidth: isSelected ? 1.5 : 0.5)
-            )
-            .onTapGesture {
-                onSelect()
-                clipboardManager.copyToClipboard(item: item)
-                // 立即关闭预览窗口
+            deleteButton
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(isSelected ? Color.blue.opacity(0.15) : Color(NSColor.textBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(isSelected ? Color.blue : Color(NSColor.separatorColor), lineWidth: isSelected ? 1.5 : 0.5)
+        )
+        .onTapGesture {
+            onSelect()
+            clipboardManager.copyToClipboard(item: item)
+            // 立即关闭预览窗口
+            onHover(nil)
+            PreviewWindowManager.shared.hidePreview()
+        }
+        .onHover { isHovered in
+            if isHovered {
+                NSCursor.pointingHand.push()
+                onHover(item)
+            } else {
+                NSCursor.pop()
                 onHover(nil)
-                PreviewWindowManager.shared.hidePreview()
-            }
-            .onHover { isHovered in
-                if isHovered {
-                    NSCursor.pointingHand.push()
-                    onHover(item)
-                } else {
-                    NSCursor.pop()
-                    onHover(nil)
-                }
             }
         }
     }

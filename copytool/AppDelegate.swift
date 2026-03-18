@@ -7,13 +7,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     static var shared: AppDelegate!
 
     var statusItem: NSStatusItem?          // 菜单栏状态项
-    private(set) var popover: NSPopover? // 弹出窗口
+    private(set) var mainWindow: NSWindow? // 主窗口（替代 popover）
     var eventMonitors: [Any] = []         // 事件监听器数组
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppDelegate.shared = self
         setupStatusBar()
-        setupPopover()
+        setupMainWindow()
         requestAccessibilityPermission()
         setupGlobalKeyboardMonitor()
         checkAndCleanupLargeHistory()
@@ -22,6 +22,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NotificationCenter.default.addObserver(self, selector: #selector(settingsChanged), name: NSNotification.Name("SettingsChanged"), object: nil)
         // 监听打开设置窗口的通知
         NotificationCenter.default.addObserver(self, selector: #selector(openSettingsFromPopover), name: NSNotification.Name("OpenSettings"), object: nil)
+        // 监听窗口置顶设置变化
+        NotificationCenter.default.addObserver(self, selector: #selector(windowAlwaysOnTopChanged), name: NSNotification.Name("WindowAlwaysOnTopChanged"), object: nil)
     }
 
     /// 检查并清理过大的历史记录
@@ -77,12 +79,34 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem?.menu = nil
     }
 
-    /// 设置弹出窗口
-    private func setupPopover() {
-        popover = NSPopover()
-        popover?.contentSize = NSSize(width: 400, height: 500)
-        popover?.behavior = .applicationDefined
-        popover?.contentViewController = NSHostingController(rootView: ContentView())
+    /// 设置主窗口（独立窗口）
+    private func setupMainWindow() {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 500),
+            styleMask: [.titled, .closable, .resizable, .miniaturizable],
+            backing: .buffered,
+            defer: false
+        )
+
+        window.center()
+        window.title = "剪贴板历史"
+        window.isReleasedWhenClosed = false
+        window.minSize = NSSize(width: 400, height: 400)
+        window.contentViewController = NSHostingController(rootView: ContentView())
+
+        // 默认窗口层级
+        updateWindowLevel()
+
+        mainWindow = window
+    }
+
+    /// 更新窗口层级（置顶/普通）
+    func updateWindowLevel() {
+        if SettingsManager.shared.windowAlwaysOnTop {
+            mainWindow?.level = .floating
+        } else {
+            mainWindow?.level = .normal
+        }
     }
 
     /// 请求辅助功能权限
@@ -160,8 +184,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// 显示设置窗口
     @objc private func showSettings() {
         DispatchQueue.main.async {
-            // 先关闭 popover
-            self.popover?.performClose(nil)
+            // 先关闭主窗口
+            self.mainWindow?.orderOut(nil)
 
             // 检查是否已有设置窗口打开
             for window in NSApp.windows where window.title == "设置" && window.isVisible {
@@ -195,21 +219,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// 切换弹出窗口的显示/隐藏
+    /// 切换主窗口的显示/隐藏
     @objc func togglePanel() {
-        guard let popover = popover, let button = statusItem?.button else { return }
+        guard let mainWindow = mainWindow else { return }
 
-        if popover.isShown {
+        if mainWindow.isVisible {
             // 确保预览窗口也被隐藏
             PreviewWindowManager.shared.hidePreview()
-            popover.performClose(nil)
+            mainWindow.orderOut(nil)
         } else {
-            popover.contentViewController = NSHostingController(rootView: ContentView())
-            popover.show(relativeTo: .zero, of: button, preferredEdge: .minY)
+            // 确保窗口内容是最新的
+            mainWindow.contentViewController = NSHostingController(rootView: ContentView())
+            mainWindow.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
-            if let window = popover.contentViewController?.view.window {
-                window.makeKeyAndOrderFront(nil)
-            }
         }
     }
 
@@ -221,8 +243,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// 从弹出窗口中打开设置
     @objc private func openSettingsFromPopover() {
         DispatchQueue.main.async {
-            self.popover?.performClose(nil)
+            self.mainWindow?.orderOut(nil)
             self.showSettings()
+        }
+    }
+
+    /// 处理窗口置顶设置变化
+    @objc private func windowAlwaysOnTopChanged() {
+        DispatchQueue.main.async {
+            self.updateWindowLevel()
         }
     }
 
