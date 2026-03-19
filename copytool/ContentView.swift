@@ -253,8 +253,7 @@ struct HistoryItemView: View {
     let onSelect: () -> Void
     let onHover: (HistoryItem?) -> Void
     @ObservedObject private var clipboardManager = ClipboardManager.shared
-    @State private var animationProgress: CGFloat = 0
-    @State private var startAngle: Double = 270
+    @State private var animateStroke = false
     @State private var animationID = UUID()
 
     var body: some View {
@@ -278,8 +277,9 @@ struct HistoryItemView: View {
 
                 // 选中时的动画边框
                 if isSelected {
-                    TrimmedRoundedRect(cornerRadius: 8)
-                        .trim(from: 0, to: animationProgress)
+                    RoundedRectangle(cornerRadius: 8)
+                        .inset(by: 1.25)
+                        .trim(from: animateStroke ? 0 : 0, to: animateStroke ? 1 : 0)
                         .stroke(
                             LinearGradient(
                                 gradient: Gradient(colors: [Color.blue, Color.blue.opacity(0.7), Color.blue]),
@@ -290,33 +290,31 @@ struct HistoryItemView: View {
                         )
                         .shadow(color: .blue, radius: 4, x: 0, y: 0)
                         .shadow(color: .blue.opacity(0.6), radius: 8, x: 0, y: 0)
-                        .rotationEffect(.degrees(startAngle))
                         .id(animationID)
                         .onAppear {
-                            animationProgress = 0
-                            withAnimation(.linear(duration: 0.8)) {
-                                animationProgress = 1
+                            animateStroke = false
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                                withAnimation(.linear(duration: 0.8)) {
+                                    animateStroke = true
+                                }
                             }
                         }
                 }
             }
         )
-        .onTapGesture { location in
-            // 根据点击位置计算起始角度（假设组件宽度为400）
-            let relativeX = location.x / 400 // 0到1
-            let angle = 270 - (relativeX * 360) // 0°是右侧，270°是顶部
-            startAngle = angle
+        .onTapGesture {
             animationID = UUID()
-            animationProgress = 0
-
+            animateStroke = false
             onSelect()
             clipboardManager.copyToClipboard(item: item)
             onHover(nil)
             PreviewWindowManager.shared.hidePreview()
 
             // 启动动画
-            withAnimation(.linear(duration: 0.8)) {
-                animationProgress = 1
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                withAnimation(.linear(duration: 0.8)) {
+                    animateStroke = true
+                }
             }
         }
         .onHover { isHovered in
@@ -330,15 +328,15 @@ struct HistoryItemView: View {
         }
         .onChange(of: isSelected) { _, selected in
             if selected {
-                animationProgress = 0
                 animationID = UUID()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
+                animateStroke = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                     withAnimation(.linear(duration: 0.8)) {
-                        animationProgress = 1
+                        animateStroke = true
                     }
                 }
             } else {
-                animationProgress = 0
+                animateStroke = false
             }
         }
     }
