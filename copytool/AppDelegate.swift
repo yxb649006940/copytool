@@ -87,9 +87,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let savedWidth = UserDefaults.standard.double(forKey: "mainWindowWidth")
         let savedHeight = UserDefaults.standard.double(forKey: "mainWindowHeight")
 
-        // 确保窗口尺寸不小于最小尺寸
+        // 确保窗口尺寸不小于最小尺寸，并更新 UserDefaults 中的无效值
         let validWidth = max(savedWidth, minSize.width)
         let validHeight = max(savedHeight, minSize.height)
+
+        // 如果保存的尺寸无效，更新 UserDefaults
+        if savedWidth > 0 && savedWidth < minSize.width {
+            UserDefaults.standard.set(minSize.width, forKey: "mainWindowWidth")
+        }
+        if savedHeight > 0 && savedHeight < minSize.height {
+            UserDefaults.standard.set(minSize.height, forKey: "mainWindowHeight")
+        }
+
         let windowSize = savedWidth > 0 && savedHeight > 0 ? NSSize(width: validWidth, height: validHeight) : defaultSize
 
         let window = NSWindow(
@@ -119,8 +128,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func windowDidResize(_ notification: Notification) {
         guard let window = notification.object as? NSWindow else { return }
         let size = window.frame.size
-        UserDefaults.standard.set(size.width, forKey: "mainWindowWidth")
-        UserDefaults.standard.set(size.height, forKey: "mainWindowHeight")
+
+        // 确保保存的尺寸不小于最小尺寸
+        let minSize = NSSize(width: 400, height: 400)
+        let validWidth = max(size.width, minSize.width)
+        let validHeight = max(size.height, minSize.height)
+
+        UserDefaults.standard.set(validWidth, forKey: "mainWindowWidth")
+        UserDefaults.standard.set(validHeight, forKey: "mainWindowHeight")
     }
 
     /// 窗口位置变化时保存到 UserDefaults
@@ -256,6 +271,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             PreviewWindowManager.shared.hidePreview()
             mainWindow.orderOut(nil)
         } else {
+            // 确保窗口尺寸有效，不小于最小尺寸
+            let minSize = NSSize(width: 400, height: 400)
+            let currentSize = mainWindow.frame.size
+            let validWidth = max(currentSize.width, minSize.width)
+            let validHeight = max(currentSize.height, minSize.height)
+
+            // 如果当前尺寸过小，调整窗口尺寸
+            if currentSize.width < minSize.width || currentSize.height < minSize.height {
+                var newFrame = mainWindow.frame
+                newFrame.size = NSSize(width: validWidth, height: validHeight)
+                mainWindow.setFrame(newFrame, display: true, animate: false)
+
+                // 更新 UserDefaults 中的保存尺寸
+                UserDefaults.standard.set(validWidth, forKey: "mainWindowWidth")
+                UserDefaults.standard.set(validHeight, forKey: "mainWindowHeight")
+            }
+
             // 恢复窗口位置（如果有保存的话）
             let savedX = UserDefaults.standard.double(forKey: "mainWindowX")
             let savedY = UserDefaults.standard.double(forKey: "mainWindowY")
