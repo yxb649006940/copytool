@@ -127,23 +127,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// 窗口大小变化时保存到 UserDefaults
     @objc private func windowDidResize(_ notification: Notification) {
         guard let window = notification.object as? NSWindow else { return }
-        let size = window.frame.size
-
-        // 确保保存的尺寸不小于最小尺寸
-        let minSize = NSSize(width: 400, height: 400)
-        let validWidth = max(size.width, minSize.width)
-        let validHeight = max(size.height, minSize.height)
-
-        UserDefaults.standard.set(validWidth, forKey: "mainWindowWidth")
-        UserDefaults.standard.set(validHeight, forKey: "mainWindowHeight")
+        saveWindowState(window: window)
     }
 
     /// 窗口位置变化时保存到 UserDefaults
     @objc private func windowDidMove(_ notification: Notification) {
         guard let window = notification.object as? NSWindow else { return }
-        let origin = window.frame.origin
-        UserDefaults.standard.set(origin.x, forKey: "mainWindowX")
-        UserDefaults.standard.set(origin.y, forKey: "mainWindowY")
+        saveWindowState(window: window)
     }
 
     /// 更新窗口层级（置顶/普通）
@@ -267,34 +257,70 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard let mainWindow = mainWindow else { return }
 
         if mainWindow.isVisible {
+            // 隐藏窗口前先保存当前状态
+            saveWindowState(window: mainWindow)
             // 确保预览窗口也被隐藏
             PreviewWindowManager.shared.hidePreview()
             mainWindow.orderOut(nil)
         } else {
-            // 从 UserDefaults 恢复窗口大小（如果有保存的话）
-            let minSize = NSSize(width: 400, height: 400)
-            let defaultSize = NSSize(width: 400, height: 500)
-            let savedWidth = UserDefaults.standard.double(forKey: "mainWindowWidth")
-            let savedHeight = UserDefaults.standard.double(forKey: "mainWindowHeight")
-            let windowSize = savedWidth > 0 && savedHeight > 0 ? NSSize(width: max(savedWidth, minSize.width), height: max(savedHeight, minSize.height)) : defaultSize
-
-            // 恢复窗口大小
-            var newFrame = mainWindow.frame
-            newFrame.size = windowSize
-            mainWindow.setFrame(newFrame, display: true, animate: false)
-
-            // 恢复窗口位置（如果有保存的话）
-            let savedX = UserDefaults.standard.double(forKey: "mainWindowX")
-            let savedY = UserDefaults.standard.double(forKey: "mainWindowY")
-            if savedX != 0 || savedY != 0 {
-                mainWindow.setFrameOrigin(NSPoint(x: savedX, y: savedY))
-            }
+            // 恢复窗口状态
+            restoreWindowState(window: mainWindow)
 
             // 确保窗口内容是最新的
             mainWindow.contentViewController = NSHostingController(rootView: ContentView())
             mainWindow.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
         }
+    }
+
+    /// 保存窗口状态（大小和位置）
+    private func saveWindowState(window: NSWindow) {
+        let minSize = NSSize(width: 400, height: 400)
+        let size = window.frame.size
+        let origin = window.frame.origin
+
+        // 保存窗口大小（确保不小于最小尺寸）
+        let validWidth = max(size.width, minSize.width)
+        let validHeight = max(size.height, minSize.height)
+        UserDefaults.standard.set(validWidth, forKey: "mainWindowWidth")
+        UserDefaults.standard.set(validHeight, forKey: "mainWindowHeight")
+
+        // 保存窗口位置
+        UserDefaults.standard.set(origin.x, forKey: "mainWindowX")
+        UserDefaults.standard.set(origin.y, forKey: "mainWindowY")
+
+        // 立即同步
+        UserDefaults.standard.synchronize()
+    }
+
+    /// 恢复窗口状态（大小和位置）
+    private func restoreWindowState(window: NSWindow) {
+        let minSize = NSSize(width: 400, height: 400)
+        let defaultSize = NSSize(width: 400, height: 500)
+
+        // 读取保存的窗口大小
+        let savedWidth = UserDefaults.standard.double(forKey: "mainWindowWidth")
+        let savedHeight = UserDefaults.standard.double(forKey: "mainWindowHeight")
+        let windowSize = savedWidth > 0 && savedHeight > 0 ? NSSize(width: max(savedWidth, minSize.width), height: max(savedHeight, minSize.height)) : defaultSize
+
+        // 读取保存的窗口位置
+        let savedX = UserDefaults.standard.double(forKey: "mainWindowX")
+        let savedY = UserDefaults.standard.double(forKey: "mainWindowY")
+        let hasSavedPosition = savedX != 0 || savedY != 0
+
+        // 构建新的窗口 frame
+        var newFrame = window.frame
+        newFrame.size = windowSize
+        if hasSavedPosition {
+            newFrame.origin = NSPoint(x: savedX, y: savedY)
+        } else {
+            // 如果没有保存的位置，居中显示
+            window.center()
+            return
+        }
+
+        // 设置窗口 frame
+        window.setFrame(newFrame, display: true, animate: false)
     }
 
     /// 处理设置更改事件
