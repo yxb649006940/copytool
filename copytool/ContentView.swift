@@ -253,7 +253,9 @@ struct HistoryItemView: View {
     let onSelect: () -> Void
     let onHover: (HistoryItem?) -> Void
     @ObservedObject private var clipboardManager = ClipboardManager.shared
-    @State private var animateStroke = false
+    @State private var animationProgress: CGFloat = 0
+    @State private var startAngle: Double = 270
+    @State private var animationID = UUID()
 
     var body: some View {
         HStack(spacing: 12) {
@@ -276,29 +278,46 @@ struct HistoryItemView: View {
 
                 // 选中时的动画边框
                 if isSelected {
-                    RoundedRectangle(cornerRadius: 8)
-                        .trim(from: animateStroke ? 0 : 0.99, to: animateStroke ? 1 : 1)
-                        .stroke(Color.blue, lineWidth: 2)
-                        .animation(
-                            Animation.linear(duration: 1.5)
-                                .repeatForever(autoreverses: false),
-                            value: animateStroke
+                    TrimmedRoundedRect(cornerRadius: 8)
+                        .trim(from: 0, to: animationProgress)
+                        .stroke(
+                            LinearGradient(
+                                gradient: Gradient(colors: [Color.blue, Color.blue.opacity(0.7), Color.blue]),
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            style: StrokeStyle(lineWidth: 2.5, lineCap: .round)
                         )
+                        .shadow(color: .blue, radius: 4, x: 0, y: 0)
+                        .shadow(color: .blue.opacity(0.6), radius: 8, x: 0, y: 0)
+                        .rotationEffect(.degrees(startAngle))
+                        .id(animationID)
                         .onAppear {
-                            animateStroke = true
-                        }
-                        .onDisappear {
-                            animateStroke = false
+                            animationProgress = 0
+                            withAnimation(.linear(duration: 0.8)) {
+                                animationProgress = 1
+                            }
                         }
                 }
             }
         )
-        .onTapGesture {
+        .onTapGesture { location in
+            // 根据点击位置计算起始角度（假设组件宽度为400）
+            let relativeX = location.x / 400 // 0到1
+            let angle = 270 - (relativeX * 360) // 0°是右侧，270°是顶部
+            startAngle = angle
+            animationID = UUID()
+            animationProgress = 0
+
             onSelect()
             clipboardManager.copyToClipboard(item: item)
-            // 立即关闭预览窗口
             onHover(nil)
             PreviewWindowManager.shared.hidePreview()
+
+            // 启动动画
+            withAnimation(.linear(duration: 0.8)) {
+                animationProgress = 1
+            }
         }
         .onHover { isHovered in
             if isHovered {
@@ -311,12 +330,15 @@ struct HistoryItemView: View {
         }
         .onChange(of: isSelected) { _, selected in
             if selected {
-                animateStroke = false
+                animationProgress = 0
+                animationID = UUID()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
-                    animateStroke = true
+                    withAnimation(.linear(duration: 0.8)) {
+                        animationProgress = 1
+                    }
                 }
             } else {
-                animateStroke = false
+                animationProgress = 0
             }
         }
     }
@@ -424,6 +446,16 @@ struct HistoryItemView: View {
                 NSCursor.pop()
             }
         }
+    }
+}
+
+// 自定义形状，直接使用 RoundedRectangle
+struct TrimmedRoundedRect: Shape {
+    let cornerRadius: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        let insetRect = rect.insetBy(dx: 1.25, dy: 1.25)
+        return RoundedRectangle(cornerRadius: cornerRadius).path(in: insetRect)
     }
 }
 
