@@ -254,7 +254,7 @@ struct HistoryItemView: View {
     let onHover: (HistoryItem?) -> Void
     @ObservedObject private var clipboardManager = ClipboardManager.shared
     @State private var animationProgress: CGFloat = 0
-    @State private var startAngle: Double = 270 // 默认顶部
+    @State private var startTrim: CGFloat = 0
     @State private var animationID = UUID()
 
     var body: some View {
@@ -278,36 +278,72 @@ struct HistoryItemView: View {
 
                 // 选中时的动画边框
                 if isSelected {
-                    RoundedRectangle(cornerRadius: 8)
-                        .inset(by: 0.75)
-                        .trim(from: 0, to: animationProgress)
-                        .stroke(
-                            LinearGradient(
-                                gradient: Gradient(colors: [Color.blue, Color.blue.opacity(0.7), Color.blue]),
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
-                            style: StrokeStyle(lineWidth: 1.5, lineCap: .round)
-                        )
-                        .shadow(color: .blue, radius: 2, x: 0, y: 0)
-                        .shadow(color: .blue.opacity(0.5), radius: 4, x: 0, y: 0)
-                        .rotationEffect(.degrees(startAngle)) // 动画从指定角度开始
-                        .id(animationID)
-                        .onAppear {
-                            animationProgress = 0
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                                withAnimation(.linear(duration: 0.8)) {
-                                    animationProgress = 1
-                                }
+                    let endTrim = startTrim + animationProgress
+                    let needsWrap = endTrim > 1
+
+                    Group {
+                        if needsWrap {
+                            // 需要绕回的情况：绘制两部分
+                            RoundedRectangle(cornerRadius: 8)
+                                .inset(by: 0.75)
+                                .trim(from: startTrim, to: 1)
+                                .stroke(
+                                    LinearGradient(
+                                        gradient: Gradient(colors: [Color.blue, Color.blue.opacity(0.7), Color.blue]),
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    ),
+                                    style: StrokeStyle(lineWidth: 1.5, lineCap: .round)
+                                )
+                                .shadow(color: .blue, radius: 2, x: 0, y: 0)
+                                .shadow(color: .blue.opacity(0.5), radius: 4, x: 0, y: 0)
+
+                            RoundedRectangle(cornerRadius: 8)
+                                .inset(by: 0.75)
+                                .trim(from: 0, to: endTrim - 1)
+                                .stroke(
+                                    LinearGradient(
+                                        gradient: Gradient(colors: [Color.blue, Color.blue.opacity(0.7), Color.blue]),
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    ),
+                                    style: StrokeStyle(lineWidth: 1.5, lineCap: .round)
+                                )
+                                .shadow(color: .blue, radius: 2, x: 0, y: 0)
+                                .shadow(color: .blue.opacity(0.5), radius: 4, x: 0, y: 0)
+                        } else {
+                            // 不需要绕回的情况：绘制单部分
+                            RoundedRectangle(cornerRadius: 8)
+                                .inset(by: 0.75)
+                                .trim(from: startTrim, to: endTrim)
+                                .stroke(
+                                    LinearGradient(
+                                        gradient: Gradient(colors: [Color.blue, Color.blue.opacity(0.7), Color.blue]),
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    ),
+                                    style: StrokeStyle(lineWidth: 1.5, lineCap: .round)
+                                )
+                                .shadow(color: .blue, radius: 2, x: 0, y: 0)
+                                .shadow(color: .blue.opacity(0.5), radius: 4, x: 0, y: 0)
+                        }
+                    }
+                    .id(animationID)
+                    .onAppear {
+                        animationProgress = 0
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                            withAnimation(.linear(duration: 0.8)) {
+                                animationProgress = 1
                             }
                         }
+                    }
                 }
             }
         )
         .onTapGesture { location in
-            // 根据点击位置的x坐标计算动画起始角度（顶部为0°）
-            let relativeX = location.x / 400 // 假设宽度为400
-            startAngle = 270 - (relativeX * 360) // 顶部为270°，向右是逆时针减少
+            // 根据点击位置计算起始位置（0到1）
+            let width = 400.0 // 假设宽度
+            startTrim = max(0, min(1, location.x / width))
             animationID = UUID()
             animationProgress = 0
             onSelect()
