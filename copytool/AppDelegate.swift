@@ -83,9 +83,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupMainWindow() {
         // 从 UserDefaults 恢复窗口大小，如果没有保存则使用默认大小
         let defaultSize = NSSize(width: 400, height: 500)
+        let minSize = NSSize(width: 400, height: 400)
         let savedWidth = UserDefaults.standard.double(forKey: "mainWindowWidth")
         let savedHeight = UserDefaults.standard.double(forKey: "mainWindowHeight")
-        let windowSize = savedWidth > 0 && savedHeight > 0 ? NSSize(width: savedWidth, height: savedHeight) : defaultSize
+
+        // 确保窗口尺寸不小于最小尺寸
+        let validWidth = max(savedWidth, minSize.width)
+        let validHeight = max(savedHeight, minSize.height)
+        let windowSize = savedWidth > 0 && savedHeight > 0 ? NSSize(width: validWidth, height: validHeight) : defaultSize
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: windowSize.width, height: windowSize.height),
@@ -97,7 +102,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.center()
         window.title = "剪贴板历史"
         window.isReleasedWhenClosed = false
-        window.minSize = NSSize(width: 400, height: 400)
+        window.minSize = minSize
         window.contentViewController = NSHostingController(rootView: ContentView())
 
         // 监听窗口大小变化以保存到 UserDefaults
@@ -210,9 +215,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// 显示设置窗口
     @objc private func showSettings() {
         DispatchQueue.main.async {
-            // 先关闭主窗口
-            self.mainWindow?.orderOut(nil)
-
             // 检查是否已有设置窗口打开
             for window in NSApp.windows where window.title == "设置" && window.isVisible {
                 window.level = .modalPanel
