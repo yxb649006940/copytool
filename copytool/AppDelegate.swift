@@ -271,22 +271,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             PreviewWindowManager.shared.hidePreview()
             mainWindow.orderOut(nil)
         } else {
-            // 确保窗口尺寸有效，不小于最小尺寸
+            // 从 UserDefaults 恢复窗口大小（如果有保存的话）
             let minSize = NSSize(width: 400, height: 400)
-            let currentSize = mainWindow.frame.size
-            let validWidth = max(currentSize.width, minSize.width)
-            let validHeight = max(currentSize.height, minSize.height)
+            let defaultSize = NSSize(width: 400, height: 500)
+            let savedWidth = UserDefaults.standard.double(forKey: "mainWindowWidth")
+            let savedHeight = UserDefaults.standard.double(forKey: "mainWindowHeight")
+            let windowSize = savedWidth > 0 && savedHeight > 0 ? NSSize(width: max(savedWidth, minSize.width), height: max(savedHeight, minSize.height)) : defaultSize
 
-            // 如果当前尺寸过小，调整窗口尺寸
-            if currentSize.width < minSize.width || currentSize.height < minSize.height {
-                var newFrame = mainWindow.frame
-                newFrame.size = NSSize(width: validWidth, height: validHeight)
-                mainWindow.setFrame(newFrame, display: true, animate: false)
-
-                // 更新 UserDefaults 中的保存尺寸
-                UserDefaults.standard.set(validWidth, forKey: "mainWindowWidth")
-                UserDefaults.standard.set(validHeight, forKey: "mainWindowHeight")
-            }
+            // 恢复窗口大小
+            var newFrame = mainWindow.frame
+            newFrame.size = windowSize
+            mainWindow.setFrame(newFrame, display: true, animate: false)
 
             // 恢复窗口位置（如果有保存的话）
             let savedX = UserDefaults.standard.double(forKey: "mainWindowX")
