@@ -253,6 +253,7 @@ struct HistoryItemView: View {
     let onSelect: () -> Void
     let onHover: (HistoryItem?) -> Void
     @ObservedObject private var clipboardManager = ClipboardManager.shared
+    @State private var animateStroke = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -268,8 +269,29 @@ struct HistoryItemView: View {
                 .fill(isSelected ? Color.blue.opacity(0.15) : Color(NSColor.textBackgroundColor))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(isSelected ? Color.blue : Color(NSColor.separatorColor), lineWidth: isSelected ? 1.5 : 0.5)
+            ZStack {
+                // 基础边框
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
+
+                // 选中时的动画边框
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 8)
+                        .trim(from: animateStroke ? 0 : 0.99, to: animateStroke ? 1 : 1)
+                        .stroke(Color.blue, lineWidth: 2)
+                        .animation(
+                            Animation.linear(duration: 1.5)
+                                .repeatForever(autoreverses: false),
+                            value: animateStroke
+                        )
+                        .onAppear {
+                            animateStroke = true
+                        }
+                        .onDisappear {
+                            animateStroke = false
+                        }
+                }
+            }
         )
         .onTapGesture {
             onSelect()
@@ -285,6 +307,16 @@ struct HistoryItemView: View {
             } else {
                 NSCursor.pop()
                 onHover(nil)
+            }
+        }
+        .onChange(of: isSelected) { _, selected in
+            if selected {
+                animateStroke = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
+                    animateStroke = true
+                }
+            } else {
+                animateStroke = false
             }
         }
     }
