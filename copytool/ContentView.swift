@@ -253,7 +253,8 @@ struct HistoryItemView: View {
     let onSelect: () -> Void
     let onHover: (HistoryItem?) -> Void
     @ObservedObject private var clipboardManager = ClipboardManager.shared
-    @State private var animateStroke = false
+    @State private var animationProgress: CGFloat = 0
+    @State private var startTrim: CGFloat = 0
     @State private var animationID = UUID()
 
     var body: some View {
@@ -270,41 +271,84 @@ struct HistoryItemView: View {
                 .fill(isSelected ? Color.blue.opacity(0.15) : Color(NSColor.textBackgroundColor))
         )
         .overlay(
-            ZStack {
-                // 基础边框
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
-
-                // 选中时的动画边框
-                if isSelected {
+            GeometryReader { geometry in
+                ZStack {
+                    // 基础边框
                     RoundedRectangle(cornerRadius: 8)
-                        .inset(by: 1.25)
-                        .trim(from: animateStroke ? 0 : 0, to: animateStroke ? 1 : 0)
-                        .stroke(
-                            LinearGradient(
-                                gradient: Gradient(colors: [Color.blue, Color.blue.opacity(0.7), Color.blue]),
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
-                            style: StrokeStyle(lineWidth: 2.5, lineCap: .round)
-                        )
-                        .shadow(color: .blue, radius: 4, x: 0, y: 0)
-                        .shadow(color: .blue.opacity(0.6), radius: 8, x: 0, y: 0)
+                        .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
+
+                    // 选中时的动画边框
+                    if isSelected {
+                        let endTrim = min(startTrim + animationProgress, 1)
+                        let needsWrap = startTrim + animationProgress > 1
+
+                        Group {
+                            if needsWrap {
+                                // 需要绕回的情况：绘制两部分
+                                RoundedRectangle(cornerRadius: 8)
+                                    .inset(by: 0.75)
+                                    .trim(from: startTrim, to: 1)
+                                    .stroke(
+                                        LinearGradient(
+                                            gradient: Gradient(colors: [Color.blue, Color.blue.opacity(0.7), Color.blue]),
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        ),
+                                        style: StrokeStyle(lineWidth: 1.5, lineCap: .round)
+                                    )
+                                    .shadow(color: .blue, radius: 2, x: 0, y: 0)
+                                    .shadow(color: .blue.opacity(0.5), radius: 4, x: 0, y: 0)
+
+                                RoundedRectangle(cornerRadius: 8)
+                                    .inset(by: 0.75)
+                                    .trim(from: 0, to: startTrim + animationProgress - 1)
+                                    .stroke(
+                                        LinearGradient(
+                                            gradient: Gradient(colors: [Color.blue, Color.blue.opacity(0.7), Color.blue]),
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        ),
+                                        style: StrokeStyle(lineWidth: 1.5, lineCap: .round)
+                                    )
+                                    .shadow(color: .blue, radius: 2, x: 0, y: 0)
+                                    .shadow(color: .blue.opacity(0.5), radius: 4, x: 0, y: 0)
+                            } else {
+                                // 不需要绕回的情况：绘制单部分
+                                RoundedRectangle(cornerRadius: 8)
+                                    .inset(by: 0.75)
+                                    .trim(from: startTrim, to: endTrim)
+                                    .stroke(
+                                        LinearGradient(
+                                            gradient: Gradient(colors: [Color.blue, Color.blue.opacity(0.7), Color.blue]),
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        ),
+                                        style: StrokeStyle(lineWidth: 1.5, lineCap: .round)
+                                    )
+                                    .shadow(color: .blue, radius: 2, x: 0, y: 0)
+                                    .shadow(color: .blue.opacity(0.5), radius: 4, x: 0, y: 0)
+                            }
+                        }
                         .id(animationID)
                         .onAppear {
-                            animateStroke = false
+                            animationProgress = 0
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                                 withAnimation(.linear(duration: 0.8)) {
-                                    animateStroke = true
+                                    animationProgress = 1
                                 }
                             }
                         }
+                    }
                 }
             }
         )
-        .onTapGesture {
+        .onTapGesture { location in
+            // 根据点击位置计算起始位置（0到1）
+            let width = 400.0 // 假设的宽度
+            startTrim = max(0, min(1, location.x / width))
             animationID = UUID()
-            animateStroke = false
+            animationProgress = 0
+
             onSelect()
             clipboardManager.copyToClipboard(item: item)
             onHover(nil)
@@ -313,7 +357,7 @@ struct HistoryItemView: View {
             // 启动动画
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                 withAnimation(.linear(duration: 0.8)) {
-                    animateStroke = true
+                    animationProgress = 1
                 }
             }
         }
@@ -329,14 +373,14 @@ struct HistoryItemView: View {
         .onChange(of: isSelected) { _, selected in
             if selected {
                 animationID = UUID()
-                animateStroke = false
+                animationProgress = 0
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                     withAnimation(.linear(duration: 0.8)) {
-                        animateStroke = true
+                        animationProgress = 1
                     }
                 }
             } else {
-                animateStroke = false
+                animationProgress = 0
             }
         }
     }
