@@ -263,11 +263,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             PreviewWindowManager.shared.hidePreview()
             mainWindow.orderOut(nil)
         } else {
-            // 先确保窗口内容是最新的（在设置 frame 之前）
-            mainWindow.contentViewController = NSHostingController(rootView: ContentView())
+            // 先确保窗口内容是最新的 - 只在第一次设置
+            if mainWindow.contentViewController == nil {
+                mainWindow.contentViewController = NSHostingController(rootView: ContentView())
+            }
 
             // 恢复窗口状态
             restoreWindowState(window: mainWindow)
+
+            // 再次确保窗口大小正确（双重保险）
+            let minSize = NSSize(width: 400, height: 400)
+            let savedWidth = UserDefaults.standard.double(forKey: "mainWindowWidth")
+            let savedHeight = UserDefaults.standard.double(forKey: "mainWindowHeight")
+            if savedWidth > 0 && savedHeight > 0 {
+                var frame = mainWindow.frame
+                frame.size = NSSize(width: max(savedWidth, minSize.width), height: max(savedHeight, minSize.height))
+                mainWindow.setFrame(frame, display: true, animate: false)
+            }
 
             mainWindow.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
