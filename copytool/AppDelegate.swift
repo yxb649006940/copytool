@@ -263,11 +263,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             PreviewWindowManager.shared.hidePreview()
             mainWindow.orderOut(nil)
         } else {
+            // 先确保窗口内容是最新的（在设置 frame 之前）
+            mainWindow.contentViewController = NSHostingController(rootView: ContentView())
+
             // 恢复窗口状态
             restoreWindowState(window: mainWindow)
 
-            // 确保窗口内容是最新的
-            mainWindow.contentViewController = NSHostingController(rootView: ContentView())
             mainWindow.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
         }
@@ -308,19 +309,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let savedY = UserDefaults.standard.double(forKey: "mainWindowY")
         let hasSavedPosition = savedX != 0 || savedY != 0
 
-        // 构建新的窗口 frame
-        var newFrame = window.frame
-        newFrame.size = windowSize
+        // 直接创建完整的 frame
+        var newFrame = NSRect(x: 0, y: 0, width: windowSize.width, height: windowSize.height)
+
         if hasSavedPosition {
             newFrame.origin = NSPoint(x: savedX, y: savedY)
         } else {
             // 如果没有保存的位置，居中显示
-            window.center()
-            return
+            newFrame.origin = window.screen?.visibleFrame.origin ?? NSPoint(x: 0, y: 0)
         }
 
-        // 设置窗口 frame
+        // 使用 setFrame 方法直接设置完整的 frame
         window.setFrame(newFrame, display: true, animate: false)
+
+        // 如果是第一次显示且没有保存位置，则居中显示
+        if !hasSavedPosition {
+            window.center()
+        }
     }
 
     /// 处理设置更改事件
