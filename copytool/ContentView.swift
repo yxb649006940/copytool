@@ -254,6 +254,7 @@ struct HistoryItemView: View {
     let onHover: (HistoryItem?) -> Void
     @ObservedObject private var clipboardManager = ClipboardManager.shared
     @State private var animationProgress: CGFloat = 0
+    @State private var startAngle: Double = 270 // 默认顶部
     @State private var animationID = UUID()
 
     var body: some View {
@@ -267,7 +268,7 @@ struct HistoryItemView: View {
         .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(isSelected ? Color.blue.opacity(0.15) : Color(NSColor.textBackgroundColor))
+                .fill(Color(NSColor.textBackgroundColor))
         )
         .overlay(
             ZStack {
@@ -290,6 +291,7 @@ struct HistoryItemView: View {
                         )
                         .shadow(color: .blue, radius: 2, x: 0, y: 0)
                         .shadow(color: .blue.opacity(0.5), radius: 4, x: 0, y: 0)
+                        .rotationEffect(.degrees(startAngle)) // 动画从指定角度开始
                         .id(animationID)
                         .onAppear {
                             animationProgress = 0
@@ -302,7 +304,10 @@ struct HistoryItemView: View {
                 }
             }
         )
-        .onTapGesture {
+        .onTapGesture { location in
+            // 根据点击位置的x坐标计算动画起始角度（顶部为0°）
+            let relativeX = location.x / 400 // 假设宽度为400
+            startAngle = 270 - (relativeX * 360) // 顶部为270°，向右是逆时针减少
             animationID = UUID()
             animationProgress = 0
             onSelect()
