@@ -35,6 +35,7 @@ struct ContentView: View {
                 .background(Color(NSColor.controlBackgroundColor))
         }
         .background(Color(NSColor.windowBackgroundColor))
+        .frame(minWidth: 400, minHeight: 400) // 添加最小尺寸限制
         .onAppear {
             // 打开面板时清理过期记录
             clipboardManager.cleanExpiredItems()
