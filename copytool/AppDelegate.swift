@@ -81,8 +81,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// 设置主窗口（独立窗口）
     private func setupMainWindow() {
+        // 从 UserDefaults 恢复窗口大小，如果没有保存则使用默认大小
+        let defaultSize = NSSize(width: 400, height: 500)
+        let savedWidth = UserDefaults.standard.double(forKey: "mainWindowWidth")
+        let savedHeight = UserDefaults.standard.double(forKey: "mainWindowHeight")
+        let windowSize = savedWidth > 0 && savedHeight > 0 ? NSSize(width: savedWidth, height: savedHeight) : defaultSize
+
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 400, height: 500),
+            contentRect: NSRect(x: 0, y: 0, width: windowSize.width, height: windowSize.height),
             styleMask: [.titled, .closable, .resizable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -94,10 +100,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.minSize = NSSize(width: 400, height: 400)
         window.contentViewController = NSHostingController(rootView: ContentView())
 
+        // 监听窗口大小变化以保存到 UserDefaults
+        NotificationCenter.default.addObserver(self, selector: #selector(windowDidResize), name: NSWindow.didResizeNotification, object: window)
+        NotificationCenter.default.addObserver(self, selector: #selector(windowDidMove), name: NSWindow.didMoveNotification, object: window)
+
         // 默认窗口层级
         updateWindowLevel()
 
         mainWindow = window
+    }
+
+    /// 窗口大小变化时保存到 UserDefaults
+    @objc private func windowDidResize(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow else { return }
+        let size = window.frame.size
+        UserDefaults.standard.set(size.width, forKey: "mainWindowWidth")
+        UserDefaults.standard.set(size.height, forKey: "mainWindowHeight")
+    }
+
+    /// 窗口位置变化时保存到 UserDefaults
+    @objc private func windowDidMove(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow else { return }
+        let origin = window.frame.origin
+        UserDefaults.standard.set(origin.x, forKey: "mainWindowX")
+        UserDefaults.standard.set(origin.y, forKey: "mainWindowY")
     }
 
     /// 更新窗口层级（置顶/普通）
@@ -228,6 +254,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             PreviewWindowManager.shared.hidePreview()
             mainWindow.orderOut(nil)
         } else {
+            // 恢复窗口位置（如果有保存的话）
+            let savedX = UserDefaults.standard.double(forKey: "mainWindowX")
+            let savedY = UserDefaults.standard.double(forKey: "mainWindowY")
+            if savedX != 0 || savedY != 0 {
+                mainWindow.setFrameOrigin(NSPoint(x: savedX, y: savedY))
+            }
+
             // 确保窗口内容是最新的
             mainWindow.contentViewController = NSHostingController(rootView: ContentView())
             mainWindow.makeKeyAndOrderFront(nil)
@@ -243,7 +276,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// 从弹出窗口中打开设置
     @objc private func openSettingsFromPopover() {
         DispatchQueue.main.async {
-            self.mainWindow?.orderOut(nil)
             self.showSettings()
         }
     }

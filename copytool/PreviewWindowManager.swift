@@ -129,8 +129,8 @@ class PreviewWindowManager {
         let mouseLocation = NSEvent.mouseLocation
         let previewSize = window.frame.size
 
-        // 找到主窗口（第一个可见窗口）
-        guard let mainWindow = NSApp.windows.first(where: { $0.isVisible && $0 != window }) else {
+        // 找到主窗口（通过 AppDelegate 获取）
+        guard let mainWindow = AppDelegate.shared.mainWindow, mainWindow.isVisible else {
             window.center()
             return
         }
@@ -139,8 +139,13 @@ class PreviewWindowManager {
         let mainScreen = mainWindow.screen ?? NSScreen.main!
         let safeRect = mainScreen.visibleFrame
 
-        // X 坐标：主窗口左边缘左侧 190 像素，确保完全不遮挡主窗口
-        var finalX = mainFrame.minX - previewSize.width - 190
+        // X 坐标：主窗口左边缘左侧 10 像素，确保不遮挡主窗口
+        var finalX = mainFrame.minX - previewSize.width - 10
+
+        // 如果左侧空间不够，显示在右侧
+        if finalX < safeRect.minX {
+            finalX = mainFrame.maxX + 10
+        }
 
         // Y 坐标：鼠标位置垂直居中于预览窗口
         var finalY = mouseLocation.y - previewSize.height / 2

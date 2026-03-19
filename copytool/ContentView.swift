@@ -5,6 +5,7 @@ struct ContentView: View {
     @State private var searchText = ""
     @State private var selectedIndex: Int?
     @State private var hoverItem: HistoryItem?
+    @State private var windowAlwaysOnTop = SettingsManager.shared.windowAlwaysOnTop
 
     var filteredHistory: [HistoryItem] {
         if searchText.isEmpty {
@@ -38,6 +39,9 @@ struct ContentView: View {
             // 打开面板时清理过期记录
             clipboardManager.cleanExpiredItems()
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("WindowAlwaysOnTopChanged"))) { _ in
+            windowAlwaysOnTop = SettingsManager.shared.windowAlwaysOnTop
+        }
         .onChange(of: hoverItem) { _, newItem in
             if let item = newItem {
                 PreviewWindowManager.shared.showPreview(for: item)
@@ -63,6 +67,28 @@ struct ContentView: View {
                 Spacer()
 
                 HStack(spacing: 8) {
+                    // 窗口置顶快捷按钮
+                    Button(action: {
+                        SettingsManager.shared.windowAlwaysOnTop.toggle()
+                        windowAlwaysOnTop = SettingsManager.shared.windowAlwaysOnTop
+                    }) {
+                        Image(systemName: windowAlwaysOnTop ? "pin.fill" : "pin")
+                            .font(.system(size: 14))
+                            .foregroundColor(windowAlwaysOnTop ? .orange : .secondary)
+                            .padding(6)
+                            .background(Color(NSColor.textBackgroundColor))
+                            .cornerRadius(4)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    .onHover { isHovered in
+                        if isHovered {
+                            NSCursor.pointingHand.push()
+                        } else {
+                            NSCursor.pop()
+                        }
+                    }
+                    .help("窗口置顶")
+
                     Button(action: {
                         showSettingsWindow()
                     }) {
@@ -81,6 +107,7 @@ struct ContentView: View {
                             NSCursor.pop()
                         }
                     }
+                    .help("设置")
 
                     Text("共 \(clipboardManager.history.count) 条记录")
                         .font(.footnote)
@@ -131,23 +158,22 @@ struct ContentView: View {
             } else {
                 // 使用 List 替代 ScrollView + VStack，利用懒加载优化性能
                 List {
-                    ForEach(Array(filteredHistory.enumerated()), id: \.element.id) { (filteredIndex, item) in
-                        // 找到原始索引
-                        if let originalIndex = clipboardManager.history.firstIndex(where: { $0.id == item.id }) {
-                            HistoryItemView(
-                                item: item,
-                                index: originalIndex,
-                                isSelected: selectedIndex == originalIndex,
-                                onSelect: {
-                                    selectedIndex = originalIndex
-                                },
-                                onHover: { hoverItem in
-                                    self.hoverItem = hoverItem
-                                }
-                            )
-                            .listRowSeparator(.hidden)
-                            .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
-                        }
+                    ForEach(filteredHistory) { item in
+                        // 使用 item.id 直接查找原始索引，减少遍历次数
+                        let originalIndex = clipboardManager.history.firstIndex(where: { $0.id == item.id }) ?? 0
+                        HistoryItemView(
+                            item: item,
+                            index: originalIndex,
+                            isSelected: selectedIndex == originalIndex,
+                            onSelect: {
+                                selectedIndex = originalIndex
+                            },
+                            onHover: { hoverItem in
+                                self.hoverItem = hoverItem
+                            }
+                        )
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
                     }
                 }
                 .listStyle(.plain)
@@ -275,10 +301,6 @@ struct HistoryItemView: View {
 
                     Spacer()
                 }
-
-                Text(item.timeString)
-                    .font(.system(size: 11))
-                    .foregroundColor(.secondary)
             }
         }
     }
