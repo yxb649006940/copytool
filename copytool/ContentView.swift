@@ -6,6 +6,8 @@ struct ContentView: View {
     @State private var selectedIndex: Int?
     @State private var hoverItem: HistoryItem?
     @State private var windowAlwaysOnTop = SettingsManager.shared.windowAlwaysOnTop
+    @State private var scrollToTop = false  // 标记是否需要滚动到顶部
+    @State private var previousHistoryCount: Int = 0  // 记录上一次的历史记录数量
 
     var filteredHistory: [HistoryItem] {
         if searchText.isEmpty {
@@ -39,16 +41,25 @@ struct ContentView: View {
         .onAppear {
             // 打开面板时清理过期记录
             clipboardManager.cleanExpiredItems()
+            // 初始化历史记录数量
+            previousHistoryCount = clipboardManager.history.count
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("WindowAlwaysOnTopChanged"))) { _ in
             windowAlwaysOnTop = SettingsManager.shared.windowAlwaysOnTop
         }
-        .onChange(of: hoverItem) { newItem in
+        .onChange(of: hoverItem) { oldItem, newItem in
             if let item = newItem {
                 PreviewWindowManager.shared.showPreview(for: item)
             } else {
                 PreviewWindowManager.shared.hidePreview()
             }
+        }
+        .onChange(of: clipboardManager.history.count) { oldCount, newCount in
+            // 当历史记录数量增加时（有新记录），标记需要滚动到顶部
+            if newCount > oldCount {
+                scrollToTop = true
+            }
+            previousHistoryCount = newCount
         }
         // 当主窗口消失时，确保预览窗口也隐藏
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didHideNotification)) { _ in
@@ -172,31 +183,54 @@ struct ContentView: View {
                     searchEmptyStateView
                 }
             } else {
-                // 使用 List 替代 ScrollView + VStack，利用懒加载优化性能
-                List {
-                    ForEach(filteredHistory) { item in
-                        // 使用 item.id 直接查找原始索引，减少遍历次数
-                        let originalIndex = clipboardManager.history.firstIndex(where: { $0.id == item.id }) ?? 0
-                        HistoryItemView(
-                            item: item,
-                            index: originalIndex,
-                            isSelected: selectedIndex == originalIndex,
-                            onSelect: {
-                                selectedIndex = originalIndex
-                            },
-                            onHover: { hoverItem in
-                                self.hoverItem = hoverItem
-                            }
-                        )
-                        .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+                // 使用 ScrollViewReader 来控制滚动位置
+                ScrollViewReader { proxy in
+                    // 使用 List 替代 ScrollView + VStack，利用懒加载优化性能
+                    List {
+                        ForEach(filteredHistory) { item in
+                            // 使用 item.id 直接查找原始索引，减少遍历次数
+                            let originalIndex = clipboardManager.history.firstIndex(where: { $0.id == item.id }) ?? 0
+                            HistoryItemView(
+                                item: item,
+                                index: originalIndex,
+                                isSelected: selectedIndex == originalIndex,
+                                onSelect: {
+                                    selectedIndex = originalIndex
+                                },
+                                onHover: { hoverItem in
+                                    self.hoverItem = hoverItem
+                                }
+                            )
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+                            .id(item.id)  // 为每个项目添加 id 用于滚动定位
+                        }
                     }
-                }
-                .listStyle(.plain)
-                .onHover { isHovered in
-                    // 当鼠标离开整个列表区域时，确保预览窗口关闭
-                    if !isHovered {
-                        hoverItem = nil
+                    .listStyle(.plain)
+                    .onHover { isHovered in
+                        // 当鼠标离开整个列表区域时，确保预览窗口关闭
+                        if !isHovered {
+                            hoverItem = nil
+                        }
+                    }
+                    .onAppear {
+                        // 窗口出现时，滚动到顶部（显示最新记录）
+                        if let firstItem = filteredHistory.first {
+                            proxy.scrollTo(firstItem.id, anchor: .top)
+                        }
+                    }
+                    .onChange(of: scrollToTop) { _, shouldScroll in
+                        // 当需要滚动到顶部时
+                        if shouldScroll, let firstItem = filteredHistory.first {
+                            proxy.scrollTo(firstItem.id, anchor: .top)
+                            scrollToTop = false
+                        }
+                    }
+                    .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
+                        // 窗口获得焦点时，确保最新记录可见
+                        if let firstItem = filteredHistory.first {
+                            proxy.scrollTo(firstItem.id, anchor: .top)
+                        }
                     }
                 }
             }
