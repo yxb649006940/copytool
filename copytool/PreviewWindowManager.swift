@@ -81,6 +81,7 @@ class PreviewWindowManager {
 
         DispatchQueue.main.async { [weak self] in
             self?.previewWindow?.orderOut(nil)
+            self?.previewWindow = nil
         }
     }
 

@@ -43,7 +43,7 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("WindowAlwaysOnTopChanged"))) { _ in
             windowAlwaysOnTop = SettingsManager.shared.windowAlwaysOnTop
         }
-        .onChange(of: hoverItem) { _, newItem in
+        .onChange(of: hoverItem) { newItem in
             if let item = newItem {
                 PreviewWindowManager.shared.showPreview(for: item)
             } else {
@@ -276,67 +276,36 @@ struct HistoryItemView: View {
                 RoundedRectangle(cornerRadius: 8)
                     .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
 
-                // 选中时的动画边框
+                // 选中时的渐变边框效果
                 if isSelected {
-                    let endTrim = startTrim + animationProgress
-                    let needsWrap = endTrim > 1
-
-                    Group {
-                        if needsWrap {
-                            // 需要绕回的情况：绘制两部分
-                            RoundedRectangle(cornerRadius: 8)
-                                .inset(by: 0.75)
-                                .trim(from: startTrim, to: 1)
-                                .stroke(
-                                    LinearGradient(
-                                        gradient: Gradient(colors: [Color.blue, Color.blue.opacity(0.7), Color.blue]),
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    ),
-                                    style: StrokeStyle(lineWidth: 1.5, lineCap: .round)
-                                )
-                                .shadow(color: .blue, radius: 2, x: 0, y: 0)
-                                .shadow(color: .blue.opacity(0.5), radius: 4, x: 0, y: 0)
-
-                            RoundedRectangle(cornerRadius: 8)
-                                .inset(by: 0.75)
-                                .trim(from: 0, to: endTrim - 1)
-                                .stroke(
-                                    LinearGradient(
-                                        gradient: Gradient(colors: [Color.blue, Color.blue.opacity(0.7), Color.blue]),
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    ),
-                                    style: StrokeStyle(lineWidth: 1.5, lineCap: .round)
-                                )
-                                .shadow(color: .blue, radius: 2, x: 0, y: 0)
-                                .shadow(color: .blue.opacity(0.5), radius: 4, x: 0, y: 0)
-                        } else {
-                            // 不需要绕回的情况：绘制单部分
-                            RoundedRectangle(cornerRadius: 8)
-                                .inset(by: 0.75)
-                                .trim(from: startTrim, to: endTrim)
-                                .stroke(
-                                    LinearGradient(
-                                        gradient: Gradient(colors: [Color.blue, Color.blue.opacity(0.7), Color.blue]),
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    ),
-                                    style: StrokeStyle(lineWidth: 1.5, lineCap: .round)
-                                )
-                                .shadow(color: .blue, radius: 2, x: 0, y: 0)
-                                .shadow(color: .blue.opacity(0.5), radius: 4, x: 0, y: 0)
-                        }
-                    }
-                    .id(animationID)
-                    .onAppear {
-                        animationProgress = 0
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                            withAnimation(.linear(duration: 0.8)) {
-                                animationProgress = 1
+                    RoundedRectangle(cornerRadius: 8)
+                        .inset(by: 1)
+                        .stroke(
+                            LinearGradient(
+                                gradient: Gradient(colors: [
+                                    Color.blue.opacity(0),
+                                    Color.blue.opacity(0.5),
+                                    Color.blue.opacity(1),
+                                    Color.blue.opacity(1),
+                                    Color.blue.opacity(0.5),
+                                    Color.blue.opacity(0)
+                                ]),
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            style: StrokeStyle(lineWidth: 1, lineCap: .round)
+                        )
+                        .shadow(color: .blue.opacity(0.3 * animationProgress), radius: 3 * animationProgress, x: 0, y: 0)
+                        .opacity(animationProgress)
+                        .id(animationID)
+                        .onAppear {
+                            animationProgress = 0
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                                withAnimation(.easeOut(duration: 0.6)) {
+                                    animationProgress = 1
+                                }
                             }
                         }
-                    }
                 }
             }
         )
