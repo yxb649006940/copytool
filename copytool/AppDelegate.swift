@@ -185,44 +185,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         eventMonitors.forEach { NSEvent.removeMonitor($0) }
         eventMonitors.removeAll()
 
-        // 首先尝试使用 CGEventTap 进行更强大的事件拦截（系统级）
-        if let eventTap = CGEvent.tapCreate(
-            tap: .cgSessionEventTap,
-            place: .headInsertEventTap,
-            options: .defaultTap,
-            eventsOfInterest: CGEventMask((1 << CGEventType.keyDown.rawValue)),
-            callback: { (proxy, type, event, refcon) in
-                let selfPtr = unsafeBitCast(refcon, to: AppDelegate.self)
-                let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
-                let modifiers = event.flags
-
-                // 检查是否匹配自定义快捷键
-                let settings = SettingsManager.shared
-                let hotkey = settings.hotkey
-
-                let isMatchingKeyCode = UInt16(keyCode) == hotkey.keyCode
-                let eventModifiers = NSEvent.ModifierFlags(rawValue: modifiers.rawValue).intersection([.command, .option, .control, .shift])
-                let isMatchingModifiers = eventModifiers == hotkey.modifierFlags
-
-                if isMatchingKeyCode && isMatchingModifiers {
-                    DispatchQueue.main.async { [weak selfPtr] in
-                        selfPtr?.togglePanel()
-                    }
-                    return nil // 阻止事件继续传递
-                }
-
-                return event // 继续传递事件
-            },
-            userInfo: unsafeBitCast(self, to: UnsafeMutableRawPointer.self)
-        ) {
-            let runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, eventTap, 0)
-            CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
-            CGEvent.tapEnable(tap: eventTap, enable: true)
-            eventMonitors.append(eventTap as Any)
-            eventMonitors.append(runLoopSource as Any)
-        }
-
-        // 全局事件监听（应用未聚焦时，作为 CGEventTap 的补充）
+        // 全局事件监听（应用未聚焦时）
         if let globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown, handler: { [weak self] event in
             self?.handleKeyDown(event)
         }) {
@@ -231,9 +194,53 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 本地事件监听（应用聚焦时）
         if let localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: { [weak self] event in
-            return self?.handleKeyDownAndReturn(event)
+            guard let self = self else { return event }
+
+            let settings = SettingsManager.shared
+            let hotkey = settings.hotkey
+
+            // 检查是否匹配自定义快捷键
+            let isMatchingKeyCode = event.keyCode == hotkey.keyCode
+            let eventModifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+            let isMatchingModifiers = eventModifiers == hotkey.modifierFlags
+
+            if isMatchingKeyCode && isMatchingModifiers {
+                DispatchQueue.main.async {
+                    self.togglePanel()
+                }
+                return nil // 阻止事件继续传递到文本输入框
+            }
+
+            return event // 继续传递事件
         }) {
             eventMonitors.append(localMonitor)
+        }
+
+        // 同时添加 keyUp 事件监听以确保状态正确
+        if let keyUpMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyUp, handler: { [weak self] event in
+            guard let self = self else { return event }
+
+            let settings = SettingsManager.shared
+            let hotkey = settings.hotkey
+
+            let isMatchingKeyCode = event.keyCode == hotkey.keyCode
+            let eventModifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+            let isMatchingModifiers = eventModifiers == hotkey.modifierFlags
+
+            if isMatchingKeyCode && isMatchingModifiers {
+                return nil // 阻止 keyUp 事件继续传递
+            }
+
+            return event
+        }) {
+            eventMonitors.append(keyUpMonitor)
+        }
+
+        // 监听修饰符按键变化事件
+        if let flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged, handler: { [weak self] event in
+            return event
+        }) {
+            eventMonitors.append(flagsMonitor)
         }
     }
 
