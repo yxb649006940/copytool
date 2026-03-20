@@ -2,3 +2,7 @@ build/
 copytool.dmg
 create_dmg.sh
 .DS_Store
+copytool.app/
+copytool.app.zip
+copytool.dmg
+dmg_temp/
