@@ -1,5 +1,6 @@
 import SwiftUI
 import Cocoa
+import CoreGraphics
 
 /// 应用程序代理类
 /// 负责应用程序的生命周期管理、菜单栏设置、快捷键监听等
@@ -184,7 +185,44 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         eventMonitors.forEach { NSEvent.removeMonitor($0) }
         eventMonitors.removeAll()
 
-        // 全局事件监听（应用未聚焦时）
+        // 首先尝试使用 CGEventTap 进行更强大的事件拦截（系统级）
+        if let eventTap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: CGEventMask((1 << CGEventType.keyDown.rawValue)),
+            callback: { (proxy, type, event, refcon) in
+                let selfPtr = unsafeBitCast(refcon, to: AppDelegate.self)
+                let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+                let modifiers = event.flags
+
+                // 检查是否匹配自定义快捷键
+                let settings = SettingsManager.shared
+                let hotkey = settings.hotkey
+
+                let isMatchingKeyCode = UInt16(keyCode) == hotkey.keyCode
+                let eventModifiers = NSEvent.ModifierFlags(rawValue: modifiers.rawValue).intersection([.command, .option, .control, .shift])
+                let isMatchingModifiers = eventModifiers == hotkey.modifierFlags
+
+                if isMatchingKeyCode && isMatchingModifiers {
+                    DispatchQueue.main.async { [weak selfPtr] in
+                        selfPtr?.togglePanel()
+                    }
+                    return nil // 阻止事件继续传递
+                }
+
+                return event // 继续传递事件
+            },
+            userInfo: unsafeBitCast(self, to: UnsafeMutableRawPointer.self)
+        ) {
+            let runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, eventTap, 0)
+            CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
+            CGEvent.tapEnable(tap: eventTap, enable: true)
+            eventMonitors.append(eventTap as Any)
+            eventMonitors.append(runLoopSource as Any)
+        }
+
+        // 全局事件监听（应用未聚焦时，作为 CGEventTap 的补充）
         if let globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown, handler: { [weak self] event in
             self?.handleKeyDown(event)
         }) {
