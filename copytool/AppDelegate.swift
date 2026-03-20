@@ -193,15 +193,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 本地事件监听（应用聚焦时）
         if let localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: { [weak self] event in
-            self?.handleKeyDown(event)
-            return event
+            return self?.handleKeyDownAndReturn(event)
         }) {
             eventMonitors.append(localMonitor)
         }
     }
 
-    /// 处理键盘按下事件
-    private func handleKeyDown(_ event: NSEvent) {
+    /// 处理键盘按下事件，并决定是否继续传递事件
+    private func handleKeyDownAndReturn(_ event: NSEvent) -> NSEvent? {
         let settings = SettingsManager.shared
         let hotkey = settings.hotkey
 
@@ -214,7 +213,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.async { [weak self] in
                 self?.togglePanel()
             }
+            return nil // 返回 nil 阻止事件继续传递
         }
+
+        return event // 不匹配，返回原始事件
+    }
+
+    /// 处理键盘按下事件（用于全局监听）
+    private func handleKeyDown(_ event: NSEvent) {
+        handleKeyDownAndReturn(event)
     }
 
     /// 显示设置窗口
