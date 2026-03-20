@@ -10,6 +10,7 @@ class PreviewWindowManager {
     private var hideTimer: Timer?                // 隐藏定时器
     private var showTask: DispatchWorkItem?      // 显示任务
     private var currentItemId: UUID?             // 当前正在显示的项目ID
+    private var isHiding: Bool = false           // 是否正在隐藏窗口的标志
 
     private init() {}
 
@@ -28,6 +29,9 @@ class PreviewWindowManager {
         hideTimer?.invalidate()
         hideTimer = nil
 
+        // 重置隐藏状态标志
+        isHiding = false
+
         // 检查是否是图片或文本类型，或者是图片格式的文件
         let shouldShowPreview = item.contentType == .text ||
                                  item.contentType == .image ||
@@ -44,6 +48,7 @@ class PreviewWindowManager {
         // 创建新的显示任务
         let task = DispatchWorkItem { [weak self] in
             guard let self = self,
+                  !self.isHiding,  // 确保不在隐藏过程中
                   self.currentItemId == item.id,
                   let mainWindow = AppDelegate.shared.mainWindow,
                   mainWindow.isVisible else {
@@ -70,6 +75,9 @@ class PreviewWindowManager {
 
     /// 隐藏预览窗口
     func hidePreview() {
+        // 设置正在隐藏的标志
+        isHiding = true
+
         // 取消正在进行的显示任务
         showTask?.cancel()
         showTask = nil
@@ -78,14 +86,19 @@ class PreviewWindowManager {
         hideTimer = nil
         currentItemId = nil
 
-        // 直接在当前线程隐藏窗口（如果在主线程）
-        if Thread.isMainThread {
-            previewWindow?.orderOut(nil)
-            previewWindow = nil
-        } else {
-            DispatchQueue.main.async { [weak self] in
-                self?.previewWindow?.orderOut(nil)
-                self?.previewWindow = nil
+        // 强制在主线程执行隐藏操作，确保同步性
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+
+            // 先 orderOut，再 close，最后置为 nil，确保完全清理
+            self.previewWindow?.orderOut(nil)
+            self.previewWindow?.close()
+            self.previewWindow?.contentViewController = nil
+            self.previewWindow = nil
+
+            // 延迟重置隐藏状态标志，防止竞态条件
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                self?.isHiding = false
             }
         }
     }
@@ -93,7 +106,9 @@ class PreviewWindowManager {
     /// 创建或更新预览窗口
     /// - Parameter item: 要预览的历史项目
     private func createOrUpdatePreviewWindow(with item: HistoryItem) {
-        if let existingWindow = previewWindow, existingWindow.isVisible {
+        // 确保只存在一个预览窗口
+        if let existingWindow = previewWindow {
+            // 无论是否可见，先更新内容
             if let hostingController = existingWindow.contentViewController as? NSHostingController<ContentPreviewView> {
                 hostingController.rootView = ContentPreviewView(item: item)
             }
@@ -102,6 +117,7 @@ class PreviewWindowManager {
             return
         }
 
+        // 创建新的预览窗口
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 350, height: 300),
             styleMask: [.borderless],

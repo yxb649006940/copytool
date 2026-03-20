@@ -50,6 +50,21 @@ struct ContentView: View {
                 PreviewWindowManager.shared.hidePreview()
             }
         }
+        // 当主窗口消失时，确保预览窗口也隐藏
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didHideNotification)) { _ in
+            hoverItem = nil
+            PreviewWindowManager.shared.hidePreview()
+        }
+        // 当应用失去焦点时，确保预览窗口也隐藏
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+            hoverItem = nil
+            PreviewWindowManager.shared.hidePreview()
+        }
+        // 当窗口即将关闭时隐藏预览
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.willCloseNotification)) { _ in
+            hoverItem = nil
+            PreviewWindowManager.shared.hidePreview()
+        }
     }
 
     private func showSettingsWindow() {
@@ -334,6 +349,8 @@ struct HistoryItemView: View {
             } else {
                 NSCursor.pop()
                 onHover(nil)
+                // 额外调用一次 hidePreview 确保窗口被隐藏
+                PreviewWindowManager.shared.hidePreview()
             }
         }
         .onChange(of: isSelected) { _, selected in
