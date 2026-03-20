@@ -50,6 +50,16 @@ struct ContentView: View {
                 PreviewWindowManager.shared.hidePreview()
             }
         }
+        // 当主窗口消失时，确保预览窗口也隐藏
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didHideNotification)) { _ in
+            hoverItem = nil
+            PreviewWindowManager.shared.hidePreview()
+        }
+        // 当应用失去焦点时，确保预览窗口也隐藏
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+            hoverItem = nil
+            PreviewWindowManager.shared.hidePreview()
+        }
     }
 
     private func showSettingsWindow() {
@@ -279,29 +289,30 @@ struct HistoryItemView: View {
                 // 选中时的渐变边框效果
                 if isSelected {
                     RoundedRectangle(cornerRadius: 8)
-                        .inset(by: 1)
+                        .inset(by: 1.5)
                         .stroke(
                             LinearGradient(
                                 gradient: Gradient(colors: [
                                     Color.blue.opacity(0),
-                                    Color.blue.opacity(0.5),
+                                    Color.blue.opacity(0.3),
+                                    Color.blue.opacity(0.7),
                                     Color.blue.opacity(1),
-                                    Color.blue.opacity(1),
-                                    Color.blue.opacity(0.5),
+                                    Color.blue.opacity(0.7),
+                                    Color.blue.opacity(0.3),
                                     Color.blue.opacity(0)
                                 ]),
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
                             ),
-                            style: StrokeStyle(lineWidth: 1, lineCap: .round)
+                            style: StrokeStyle(lineWidth: 0.5, lineCap: .round)
                         )
-                        .shadow(color: .blue.opacity(0.3 * animationProgress), radius: 3 * animationProgress, x: 0, y: 0)
+                        .shadow(color: .blue.opacity(0.2 * animationProgress), radius: 2 * animationProgress, x: 0, y: 0)
                         .opacity(animationProgress)
                         .id(animationID)
                         .onAppear {
                             animationProgress = 0
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                                withAnimation(.easeOut(duration: 0.6)) {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) {
+                                withAnimation(.easeOut(duration: 0.5)) {
                                     animationProgress = 1
                                 }
                             }

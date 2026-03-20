@@ -79,9 +79,12 @@ class PreviewWindowManager {
         hideTimer = nil
         currentItemId = nil
 
+        // 立即在主线程隐藏预览窗口，确保一定消失
         DispatchQueue.main.async { [weak self] in
-            self?.previewWindow?.orderOut(nil)
-            self?.previewWindow = nil
+            guard let self = self else { return }
+            self.previewWindow?.orderOut(nil)
+            self.previewWindow?.close()
+            self.previewWindow = nil
         }
     }
 
