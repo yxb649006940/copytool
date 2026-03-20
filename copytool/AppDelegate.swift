@@ -288,6 +288,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 mainWindow.setFrame(frame, display: true, animate: false)
             }
 
+            // 更新窗口层级（确保置顶设置生效）
+            updateWindowLevel()
             mainWindow.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
         }
