@@ -22,8 +22,11 @@ class PreviewWindowManager {
             return
         }
 
-        // 取消正在进行的显示任务
+        // 立即取消所有正在进行的任务
         showTask?.cancel()
+        showTask = nil
+        hideTimer?.invalidate()
+        hideTimer = nil
 
         // 检查是否是图片或文本类型，或者是图片格式的文件
         let shouldShowPreview = item.contentType == .text ||
@@ -38,12 +41,8 @@ class PreviewWindowManager {
         // 记录当前要显示的项目ID
         currentItemId = item.id
 
-        hideTimer?.invalidate()
-        hideTimer = nil
-
         // 创建新的显示任务
         let task = DispatchWorkItem { [weak self] in
-            // 检查任务是否已取消、当前要显示的项目已更改、或者主窗口已关闭
             guard let self = self,
                   self.currentItemId == item.id,
                   let mainWindow = AppDelegate.shared.mainWindow,
@@ -54,7 +53,7 @@ class PreviewWindowManager {
         }
 
         showTask = task
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: task)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: task)
     }
 
     /// 检查是否是图片文件类型
@@ -79,12 +78,15 @@ class PreviewWindowManager {
         hideTimer = nil
         currentItemId = nil
 
-        // 立即在主线程隐藏预览窗口，确保一定消失
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            self.previewWindow?.orderOut(nil)
-            self.previewWindow?.close()
-            self.previewWindow = nil
+        // 直接在当前线程隐藏窗口（如果在主线程）
+        if Thread.isMainThread {
+            previewWindow?.orderOut(nil)
+            previewWindow = nil
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.previewWindow?.orderOut(nil)
+                self?.previewWindow = nil
+            }
         }
     }
 
