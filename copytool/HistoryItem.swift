@@ -74,7 +74,7 @@ struct HistoryItem: Identifiable, Codable, Equatable {
         self.id = UUID()
         self.contentType = .image
         self.textContent = nil
-        self.imageData = HistoryItem.compressImage(image) // 使用压缩后的图片数据
+        self.imageData = image.tiffRepresentation // 直接保存原始图片数据，不压缩
         self.fileName = nil
         self.fileURL = nil
         self.timestamp = Date()
@@ -90,25 +90,6 @@ struct HistoryItem: Identifiable, Codable, Equatable {
         self.fileName = fileURL.lastPathComponent
         self.fileURL = fileURL.absoluteString
         self.timestamp = Date()
-    }
-
-    /// 压缩图片以减少存储大小
-    /// - Parameter image: 原始图片
-    /// - Returns: 压缩后的图片数据
-    private static func compressImage(_ image: NSImage) -> Data? {
-        // 尝试转换为 JPEG 格式，压缩质量 0.8
-        if let tiffData = image.tiffRepresentation,
-           let bitmap = NSBitmapImageRep(data: tiffData) {
-            let jpegData = bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.8])
-            if let jpegData = jpegData {
-                // 如果压缩后的尺寸仍然太大，进一步压缩
-                if jpegData.count > 100 * 1024 { // 超过 100KB 进一步压缩
-                    return bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.5])
-                }
-                return jpegData
-            }
-        }
-        return nil
     }
 
     /// 获取图片对象
