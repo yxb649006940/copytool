@@ -158,6 +158,19 @@ copytool/
 3. 在 Build/Products/Release 文件夹中找到 .app 文件
 4. 复制到应用程序文件夹
 
+### 3. 使用脚本构建
+1. 运行 `./build_app.sh` - 构建 Release 版本的应用
+2. 运行 `./create_dmg.sh` - 创建 DMG 安装包
+
+## 开发工作流程
+
+修改问题时遵循以下流程：
+1. 修改问题代码
+2. **不提交到 Git**（修改完成后只在本地测试）
+3. 运行 `./build_app.sh` 构建应用
+4. 运行 `./create_dmg.sh` 打包 DMG
+5. 在本地测试 DMG 安装包
+
 ## 已知问题
 
 - 全局快捷键需要辅助功能权限

@@ -10,6 +10,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem?          // 菜单栏状态项
     private(set) var mainWindow: NSWindow? // 主窗口（替代 popover）
     var eventMonitors: [Any] = []         // 事件监听器数组
+    private var eventTap: CFMachPort?     // CGEventTap 句柄
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppDelegate.shared = self
@@ -185,67 +186,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         eventMonitors.forEach { NSEvent.removeMonitor($0) }
         eventMonitors.removeAll()
 
-        // 全局事件监听（应用未聚焦时）
-        if let globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown, handler: { [weak self] event in
-            self?.handleKeyDown(event)
-        }) {
-            eventMonitors.append(globalMonitor)
-        }
+        // 首先尝试设置 CGEventTap（需要辅助功能权限）
+        setupEventTap()
 
-        // 本地事件监听（应用聚焦时）
+        // 本地事件监听（应用聚焦时）- 作为备用方案
         if let localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: { [weak self] event in
             guard let self = self else { return event }
-
-            let settings = SettingsManager.shared
-            let hotkey = settings.hotkey
-
-            // 检查是否匹配自定义快捷键
-            let isMatchingKeyCode = event.keyCode == hotkey.keyCode
-            let eventModifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
-            let isMatchingModifiers = eventModifiers == hotkey.modifierFlags
-
-            if isMatchingKeyCode && isMatchingModifiers {
-                DispatchQueue.main.async {
-                    self.togglePanel()
-                }
-                return nil // 阻止事件继续传递到文本输入框
-            }
-
-            return event // 继续传递事件
+            return self.handleLocalKeyDown(event: event)
         }) {
             eventMonitors.append(localMonitor)
         }
 
-        // 同时添加 keyUp 事件监听以确保状态正确
+        // 添加 keyUp 事件监听
         if let keyUpMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyUp, handler: { [weak self] event in
             guard let self = self else { return event }
-
-            let settings = SettingsManager.shared
-            let hotkey = settings.hotkey
-
-            let isMatchingKeyCode = event.keyCode == hotkey.keyCode
-            let eventModifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
-            let isMatchingModifiers = eventModifiers == hotkey.modifierFlags
-
-            if isMatchingKeyCode && isMatchingModifiers {
-                return nil // 阻止 keyUp 事件继续传递
-            }
-
-            return event
+            return self.handleLocalKeyUp(event: event)
         }) {
             eventMonitors.append(keyUpMonitor)
         }
-
-        // 监听修饰符按键变化事件
-        if let flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged, handler: { [weak self] event in
-            return event
-        }) {
-            eventMonitors.append(flagsMonitor)
-        }
     }
 
-    /// 处理键盘按下事件，并决定是否继续传递事件
-    private func handleKeyDownAndReturn(_ event: NSEvent) -> NSEvent? {
+    /// 处理本地 keyDown 事件
+    private func handleLocalKeyDown(event: NSEvent) -> NSEvent? {
         let settings = SettingsManager.shared
         let hotkey = settings.hotkey
 
@@ -258,15 +220,104 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.async { [weak self] in
                 self?.togglePanel()
             }
-            return nil // 返回 nil 阻止事件继续传递
+            return nil // 阻止事件继续传递
         }
 
-        return event // 不匹配，返回原始事件
+        return event
     }
 
-    /// 处理键盘按下事件（用于全局监听）
-    private func handleKeyDown(_ event: NSEvent) {
-        handleKeyDownAndReturn(event)
+    /// 处理本地 keyUp 事件
+    private func handleLocalKeyUp(event: NSEvent) -> NSEvent? {
+        let settings = SettingsManager.shared
+        let hotkey = settings.hotkey
+
+        let isMatchingKeyCode = event.keyCode == hotkey.keyCode
+        let eventModifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        let isMatchingModifiers = eventModifiers == hotkey.modifierFlags
+
+        if isMatchingKeyCode && isMatchingModifiers {
+            return nil // 阻止 keyUp 事件继续传递
+        }
+
+        return event
+    }
+
+    /// 设置 CGEventTap 来拦截键盘事件（更底层，可以真正阻止事件传递）
+    private func setupEventTap() {
+        // 先清理旧的 EventTap
+        cleanupEventTap()
+
+        let eventMask = (1 << CGEventType.keyDown.rawValue)
+        guard let tap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: CGEventMask(eventMask),
+            callback: { proxy, type, event, refcon in
+                // 回调函数，处理事件
+                let appDelegate = Unmanaged<AppDelegate>.fromOpaque(refcon!).takeUnretainedValue()
+                return appDelegate.handleEventTap(proxy: proxy, type: type, event: event)
+            },
+            userInfo: Unmanaged.passUnretained(self).toOpaque()
+        ) else {
+            print("无法创建 EventTap，可能是没有辅助功能权限")
+            return
+        }
+
+        eventTap = tap
+
+        // 将 EventTap 添加到 RunLoop 中
+        let runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+        CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
+
+        // 启用 EventTap
+        CGEvent.tapEnable(tap: tap, enable: true)
+        print("EventTap 设置成功")
+    }
+
+    /// 清理 EventTap
+    private func cleanupEventTap() {
+        if let tap = eventTap {
+            CGEvent.tapEnable(tap: tap, enable: false)
+            eventTap = nil
+        }
+    }
+
+    /// 处理 EventTap 回调
+    private func handleEventTap(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        // 如果不是 keyDown 事件，直接返回
+        if type != .keyDown {
+            return Unmanaged.passRetained(event)
+        }
+
+        let settings = SettingsManager.shared
+        let hotkey = settings.hotkey
+
+        // 获取按键信息
+        let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+        var flags = event.flags
+
+        // 提取我们关心的修饰键
+        var modifierFlags: NSEvent.ModifierFlags = []
+        if flags.contains(.maskCommand) { modifierFlags.insert(.command) }
+        if flags.contains(.maskAlternate) { modifierFlags.insert(.option) }
+        if flags.contains(.maskControl) { modifierFlags.insert(.control) }
+        if flags.contains(.maskShift) { modifierFlags.insert(.shift) }
+
+        // 检查是否匹配我们的快捷键
+        let isMatchingKeyCode = UInt16(keyCode) == hotkey.keyCode
+        let isMatchingModifiers = modifierFlags == hotkey.modifierFlags
+
+        if isMatchingKeyCode && isMatchingModifiers {
+            // 匹配成功，处理快捷键并返回 nil 来阻止事件传递
+            DispatchQueue.main.async { [weak self] in
+                self?.togglePanel()
+            }
+            return nil // 阻止事件继续传递！
+        }
+
+        // 不匹配，返回原始事件
+        return Unmanaged.passRetained(event)
     }
 
     /// 显示设置窗口
@@ -396,6 +447,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// 处理设置更改事件
     @objc private func settingsChanged() {
+        print("设置已更改，重新设置键盘监听")
         setupGlobalKeyboardMonitor()
     }
 
@@ -415,6 +467,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         eventMonitors.forEach { NSEvent.removeMonitor($0) }
+        cleanupEventTap()
         NotificationCenter.default.removeObserver(self)
     }
 
