@@ -11,6 +11,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private(set) var mainWindow: NSWindow? // 主窗口（替代 popover）
     var eventMonitors: [Any] = []         // 事件监听器数组
     private var eventTap: CFMachPort?     // CGEventTap 句柄
+    private var eventTapRunLoopSource: CFRunLoopSource?  // EventTap 的 RunLoop 源
+    private var eventTapCheckTimer: Timer?  // EventTap 状态检查定时器
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppDelegate.shared = self
@@ -204,6 +206,37 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }) {
             eventMonitors.append(keyUpMonitor)
         }
+
+        // 添加全局事件监听（使用 addGlobalMonitor，即使应用不聚焦也能收到通知）
+        // 注意：addGlobalMonitor 只能监听，不能拦截事件
+        NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self = self else { return }
+            // 只在 EventTap 可能失效时才使用这个作为备用触发方式
+            // 我们通过检查应用是否被激活来决定是否处理
+            if !NSApp.isActive {
+                self.handleGlobalKeyDown(event: event)
+            }
+        }
+    }
+
+    /// 处理全局 keyDown 事件（作为备用方案）
+    private func handleGlobalKeyDown(event: NSEvent) {
+        let settings = SettingsManager.shared
+        let hotkey = settings.hotkey
+
+        // 检查是否匹配自定义快捷键
+        let isMatchingKeyCode = event.keyCode == hotkey.keyCode
+        let eventModifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        let isMatchingModifiers = eventModifiers == hotkey.modifierFlags
+
+        if isMatchingKeyCode && isMatchingModifiers {
+            // 这个备用方案只在主窗口不可见时才触发（避免重复触发）
+            if let mainWindow = mainWindow, !mainWindow.isVisible {
+                DispatchQueue.main.async { [weak self] in
+                    self?.togglePanel()
+                }
+            }
+        }
     }
 
     /// 处理本地 keyDown 事件
@@ -269,17 +302,65 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // 将 EventTap 添加到 RunLoop 中
         let runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
         CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
+        eventTapRunLoopSource = runLoopSource
 
         // 启用 EventTap
         CGEvent.tapEnable(tap: tap, enable: true)
         print("EventTap 设置成功")
+
+        // 启动 EventTap 状态检查定时器
+        setupEventTapCheckTimer()
+    }
+
+    /// 设置 EventTap 状态检查定时器
+    private func setupEventTapCheckTimer() {
+        eventTapCheckTimer?.invalidate()
+        eventTapCheckTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] timer in
+            guard let self = self else {
+                timer.invalidate()
+                return
+            }
+
+            self.checkEventTapValidity()
+        }
+    }
+
+    /// 检查 EventTap 是否仍然有效
+    private func checkEventTapValidity() {
+        // 检查 EventTap 是否存在且仍然有效
+        guard let tap = eventTap else {
+            print("EventTap 不存在，重新尝试设置")
+            self.setupEventTap()
+            return
+        }
+
+        // 尝试获取 EventTap 的属性来检查其有效性
+        // 这里使用一种简单的方法：检查是否可以成功调用 CGEvent.tapEnable（它会返回布尔值）
+        let isTapEnabled = CGEvent.tapIsEnabled(tap: tap)
+        if !isTapEnabled {
+            print("EventTap 已被禁用，重新设置")
+            self.setupEventTap()
+            return
+        }
+
+        // 额外的检查：尝试获取 EventTap 的事件类型
+        // 如果 EventTap 无效，这些调用可能会失败，但为了安全，我们不在这里进行
+        print("EventTap 状态检查 - 有效")
     }
 
     /// 清理 EventTap
     private func cleanupEventTap() {
+        eventTapCheckTimer?.invalidate()
+        eventTapCheckTimer = nil
+
         if let tap = eventTap {
             CGEvent.tapEnable(tap: tap, enable: false)
             eventTap = nil
+        }
+
+        if let runLoopSource = eventTapRunLoopSource {
+            CFRunLoopRemoveSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
+            eventTapRunLoopSource = nil
         }
     }
 
@@ -357,24 +438,45 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// 切换主窗口的显示/隐藏
     @objc func togglePanel() {
-        guard let mainWindow = mainWindow else { return }
+        guard let mainWindow = mainWindow else {
+            print("Error: mainWindow is nil")
+            return
+        }
+
+        print("=== togglePanel() called ===")
+        print("Window visible: \(mainWindow.isVisible)")
+        print("Window level: \(mainWindow.level.rawValue)")
+        print("Floating level: \(NSWindow.Level.floating.rawValue)")
+        print("Window always on top setting: \(SettingsManager.shared.windowAlwaysOnTop)")
+        print("Window key: \(mainWindow.isKeyWindow)")
+        print("---------------------------")
 
         if mainWindow.isVisible {
-            // 隐藏窗口前先保存当前状态
-            saveWindowState(window: mainWindow)
-            // 确保预览窗口也被隐藏
-            PreviewWindowManager.shared.hidePreview()
-            mainWindow.orderOut(nil)
+            // 窗口已存在且可见
+            if mainWindow.level != .floating {
+                // 窗口没有置顶，将其临时置顶（不改变设置）
+                print("Window is visible but not floating - temporarily bringing to top")
+                mainWindow.level = .floating
+                mainWindow.makeKeyAndOrderFront(nil)
+                NSApp.activate(ignoringOtherApps: true)
+                print("✅ Window has been temporarily brought to front and made floating")
+            } else {
+                // 窗口已经置顶，关闭窗口
+                print("Window is visible and floating - closing")
+                saveWindowState(window: mainWindow)
+                PreviewWindowManager.shared.hidePreview()
+                mainWindow.orderOut(nil)
+                print("✅ Window closed")
+            }
         } else {
-            // 先确保窗口内容是最新的 - 只在第一次设置
+            // 窗口未显示，显示窗口
+            print("Window not visible - showing window")
             if mainWindow.contentViewController == nil {
                 mainWindow.contentViewController = NSHostingController(rootView: ContentView())
             }
 
-            // 恢复窗口状态
             restoreWindowState(window: mainWindow)
 
-            // 再次确保窗口大小正确（双重保险）
             let minSize = NSSize(width: 400, height: 400)
             let savedWidth = UserDefaults.standard.double(forKey: "mainWindowWidth")
             let savedHeight = UserDefaults.standard.double(forKey: "mainWindowHeight")
@@ -384,10 +486,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 mainWindow.setFrame(frame, display: true, animate: false)
             }
 
-            // 更新窗口层级（确保置顶设置生效）
-            updateWindowLevel()
+            // 应用正确的层级
+            if SettingsManager.shared.windowAlwaysOnTop {
+                mainWindow.level = .floating
+            } else {
+                mainWindow.level = .normal
+            }
+
             mainWindow.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
+            print("✅ Window has been shown")
         }
     }
 

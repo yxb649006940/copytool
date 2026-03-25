@@ -6,3 +6,7 @@ copytool.app/
 copytool.app.zip
 copytool.dmg
 dmg_temp/
+dmg/
+package.sh
+package_dmg.sh
+*.dmg
