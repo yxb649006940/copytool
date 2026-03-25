@@ -13,6 +13,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var eventTap: CFMachPort?     // CGEventTap 句柄
     private var eventTapRunLoopSource: CFRunLoopSource?  // EventTap 的 RunLoop 源
     private var eventTapCheckTimer: Timer?  // EventTap 状态检查定时器
+    private var isProcessingHotkey = false  // 防止快捷键重复触发
+    private var wasTemporarilyToggled = false  // 标记窗口是否被临时置顶
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppDelegate.shared = self
@@ -206,21 +208,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }) {
             eventMonitors.append(keyUpMonitor)
         }
-
-        // 添加全局事件监听（使用 addGlobalMonitor，即使应用不聚焦也能收到通知）
-        // 注意：addGlobalMonitor 只能监听，不能拦截事件
-        NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self = self else { return }
-            // 只在 EventTap 可能失效时才使用这个作为备用触发方式
-            // 我们通过检查应用是否被激活来决定是否处理
-            if !NSApp.isActive {
-                self.handleGlobalKeyDown(event: event)
-            }
-        }
     }
 
     /// 处理全局 keyDown 事件（作为备用方案）
     private func handleGlobalKeyDown(event: NSEvent) {
+        guard !isProcessingHotkey else {
+            return
+        }
+
         let settings = SettingsManager.shared
         let hotkey = settings.hotkey
 
@@ -241,6 +236,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// 处理本地 keyDown 事件
     private func handleLocalKeyDown(event: NSEvent) -> NSEvent? {
+        // 注意：如果有 EventTap 正在工作（辅助功能权限已授予），本地事件监听会被禁用
+        // 这样可以防止重复触发 togglePanel()
+        guard eventTap == nil else {
+            return event // EventTap 已在处理，本地事件监听不处理
+        }
+
+        guard !isProcessingHotkey else {
+            return event // 已有处理进行中，直接返回事件
+        }
+
         let settings = SettingsManager.shared
         let hotkey = settings.hotkey
 
@@ -371,6 +376,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return Unmanaged.passRetained(event)
         }
 
+        // 检查是否正在处理快捷键
+        guard !isProcessingHotkey else {
+            return Unmanaged.passRetained(event)
+        }
+
         let settings = SettingsManager.shared
         let hotkey = settings.hotkey
 
@@ -438,10 +448,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// 切换主窗口的显示/隐藏
     @objc func togglePanel() {
+        // 防止重复触发
+        guard !isProcessingHotkey else {
+            print("Skipping - already processing hotkey")
+            return
+        }
+
         guard let mainWindow = mainWindow else {
             print("Error: mainWindow is nil")
             return
         }
+
+        isProcessingHotkey = true
 
         print("=== togglePanel() called ===")
         print("Window visible: \(mainWindow.isVisible)")
@@ -452,21 +470,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         print("---------------------------")
 
         if mainWindow.isVisible {
-            // 窗口已存在且可见
-            if mainWindow.level != .floating {
-                // 窗口没有置顶，将其临时置顶（不改变设置）
-                print("Window is visible but not floating - temporarily bringing to top")
-                mainWindow.level = .floating
-                mainWindow.makeKeyAndOrderFront(nil)
-                NSApp.activate(ignoringOtherApps: true)
-                print("✅ Window has been temporarily brought to front and made floating")
-            } else {
-                // 窗口已经置顶，关闭窗口
-                print("Window is visible and floating - closing")
+            // 如果窗口是当前的 key window，则关闭；否则只让它到前方但不改变置顶状态
+            if mainWindow.isKeyWindow {
+                // 窗口是当前的 key window - 关闭窗口
+                print("Window is key window - closing window")
                 saveWindowState(window: mainWindow)
                 PreviewWindowManager.shared.hidePreview()
                 mainWindow.orderOut(nil)
                 print("✅ Window closed")
+            } else {
+                // 窗口已显示但不是 key window - 让它到前方但保持原有的置顶设置
+                print("Window is visible but not key window - bringing to front")
+                // 恢复根据设置应该有的层级
+                if SettingsManager.shared.windowAlwaysOnTop {
+                    mainWindow.level = .floating
+                } else {
+                    mainWindow.level = .normal
+                }
+                mainWindow.makeKeyAndOrderFront(nil)
+                NSApp.activate(ignoringOtherApps: true)
+                print("✅ Window has been brought to front")
             }
         } else {
             // 窗口未显示，显示窗口
@@ -496,6 +519,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             mainWindow.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             print("✅ Window has been shown")
+        }
+
+        // 重置状态（延迟时间缩短一点，让响应更迅速）
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            self?.isProcessingHotkey = false
         }
     }
 
