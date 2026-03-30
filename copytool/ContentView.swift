@@ -8,6 +8,12 @@ struct ContentView: View {
     @State private var windowAlwaysOnTop = SettingsManager.shared.windowAlwaysOnTop
     @State private var scrollToTop = false  // 标记是否需要滚动到顶部
     @State private var previousHistoryCount: Int = 0  // 记录上一次的历史记录数量
+    @State private var selectedTab: Tab = .history  // 当前选中的 tab
+
+    enum Tab {
+        case history
+        case favorites
+    }
 
     var filteredHistory: [HistoryItem] {
         if searchText.isEmpty {
@@ -27,7 +33,14 @@ struct ContentView: View {
 
             Divider()
 
-            historyListView
+            tabNavigationView
+
+            // 根据选中的 tab 显示相应内容
+            if selectedTab == .history {
+                historyListView
+            } else {
+                favoritesListView
+            }
 
             Divider()
 
@@ -82,6 +95,91 @@ struct ContentView: View {
         DispatchQueue.main.async {
             NotificationCenter.default.post(name: NSNotification.Name("OpenSettings"), object: nil)
         }
+    }
+
+    // 新增：Tab 导航视图
+    private var tabNavigationView: some View {
+        HStack(spacing: 4) {
+            Button(action: {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    selectedTab = .history
+                }
+            }) {
+                HStack(spacing: 6) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 14, weight: .medium))
+                    Text("剪贴记录")
+                        .font(.system(size: 13, weight: .medium))
+                    Text("\(clipboardManager.history.count)")
+                        .font(.system(size: 11, weight: .semibold))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(
+                            Capsule()
+                                .fill(selectedTab == .history ? Color.blue.opacity(0.2) : Color.secondary.opacity(0.15))
+                        )
+                        .foregroundColor(selectedTab == .history ? .blue : .secondary)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 9)
+                .frame(maxWidth: .infinity)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(selectedTab == .history ? Color.blue.opacity(0.12) : Color.clear)
+                )
+                .foregroundColor(selectedTab == .history ? .blue : .secondary)
+                .contentShape(RoundedRectangle(cornerRadius: 8))
+            }
+            .buttonStyle(PlainButtonStyle())
+            .onHover { isHovered in
+                if isHovered {
+                    NSCursor.pointingHand.push()
+                } else {
+                    NSCursor.pop()
+                }
+            }
+
+            Button(action: {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    selectedTab = .favorites
+                }
+            }) {
+                HStack(spacing: 6) {
+                    Image(systemName: "star.fill")
+                        .font(.system(size: 14, weight: .medium))
+                    Text("收藏")
+                        .font(.system(size: 13, weight: .medium))
+                    Text("\(clipboardManager.favorites.count)")
+                        .font(.system(size: 11, weight: .semibold))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(
+                            Capsule()
+                                .fill(selectedTab == .favorites ? Color.yellow.opacity(0.25) : Color.secondary.opacity(0.15))
+                        )
+                        .foregroundColor(selectedTab == .favorites ? .yellow : .secondary)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 9)
+                .frame(maxWidth: .infinity)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(selectedTab == .favorites ? Color.yellow.opacity(0.15) : Color.clear)
+                )
+                .foregroundColor(selectedTab == .favorites ? .yellow : .secondary)
+                .contentShape(RoundedRectangle(cornerRadius: 8))
+            }
+            .buttonStyle(PlainButtonStyle())
+            .onHover { isHovered in
+                if isHovered {
+                    NSCursor.pointingHand.push()
+                } else {
+                    NSCursor.pop()
+                }
+            }
+        }
+        .padding(4)
+        .background(Color(NSColor.controlBackgroundColor))
     }
 
     private var headerView: some View {
@@ -199,6 +297,9 @@ struct ContentView: View {
                                 },
                                 onHover: { hoverItem in
                                     self.hoverItem = hoverItem
+                                },
+                                onToggleFavorite: {
+                                    clipboardManager.toggleFavorite(item: item)
                                 }
                             )
                             .listRowSeparator(.hidden)
@@ -293,6 +394,65 @@ struct ContentView: View {
                 .foregroundColor(.secondary)
         }
     }
+
+    // 新增：收藏列表视图
+    private var favoritesListView: some View {
+        Group {
+            if clipboardManager.favorites.isEmpty {
+                VStack(spacing: 16) {
+                    Image(systemName: "star")
+                        .font(.system(size: 48))
+                        .foregroundColor(.secondary)
+
+                    Text("暂无收藏记录")
+                        .font(.headline)
+                        .foregroundColor(.secondary)
+
+                    Text("点击剪贴记录上的星标按钮来添加收藏")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary.opacity(0.6))
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding()
+            } else {
+                // 使用 ScrollViewReader 来控制滚动位置
+                ScrollViewReader { proxy in
+                    // 使用 List 替代 ScrollView + VStack，利用懒加载优化性能
+                    List {
+                        ForEach(clipboardManager.favorites) { item in
+                            // 使用 item.id 直接查找原始索引，减少遍历次数
+                            FavoriteItemView(
+                                item: item,
+                                onSelect: { /* 处理选择 */ },
+                                onHover: { hoverItem in
+                                    self.hoverItem = hoverItem
+                                },
+                                onUnfavorite: {
+                                    clipboardManager.toggleFavorite(item: item)
+                                }
+                            )
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+                            .id(item.id)  // 为每个项目添加 id 用于滚动定位
+                        }
+                    }
+                    .listStyle(.plain)
+                    .onHover { isHovered in
+                        // 当鼠标离开整个列表区域时，确保预览窗口关闭
+                        if !isHovered {
+                            hoverItem = nil
+                        }
+                    }
+                    .onAppear {
+                        // 窗口出现时，滚动到顶部（显示最新记录）
+                        if let firstItem = clipboardManager.favorites.first {
+                            proxy.scrollTo(firstItem.id, anchor: .top)
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 struct HistoryItemView: View {
@@ -301,6 +461,7 @@ struct HistoryItemView: View {
     let isSelected: Bool
     let onSelect: () -> Void
     let onHover: (HistoryItem?) -> Void
+    let onToggleFavorite: () -> Void  // 新增：收藏按钮回调
     @ObservedObject private var clipboardManager = ClipboardManager.shared
     @State private var animationProgress: CGFloat = 0
     @State private var startTrim: CGFloat = 0
@@ -311,6 +472,9 @@ struct HistoryItemView: View {
             contentPreview
 
             Spacer()
+
+            // 新增：收藏按钮
+            favoriteButton
 
             deleteButton
         }
@@ -486,6 +650,28 @@ struct HistoryItemView: View {
         return "paperplane.fill" // 默认文件图标
     }
 
+    // 新增：收藏按钮
+    private var favoriteButton: some View {
+        Button(action: {
+            onToggleFavorite()
+        }) {
+            Image(systemName: item.isFavorite ? "star.fill" : "star")
+                .font(.system(size: 12))
+                .foregroundColor(item.isFavorite ? .yellow : .secondary)
+                .padding(6)
+                .background(Color(NSColor.controlBackgroundColor))
+                .cornerRadius(4)
+        }
+        .buttonStyle(PlainButtonStyle())
+        .onHover { isHovered in
+            if isHovered {
+                NSCursor.pointingHand.push()
+            } else {
+                NSCursor.pop()
+            }
+        }
+    }
+
     private var deleteButton: some View {
         Button(action: {
             clipboardManager.removeItem(at: index)
@@ -493,6 +679,174 @@ struct HistoryItemView: View {
             Image(systemName: "xmark")
                 .font(.system(size: 12))
                 .foregroundColor(.secondary)
+                .padding(6)
+                .background(Color(NSColor.controlBackgroundColor))
+                .cornerRadius(4)
+        }
+        .buttonStyle(PlainButtonStyle())
+        .onHover { isHovered in
+            if isHovered {
+                NSCursor.pointingHand.push()
+            } else {
+                NSCursor.pop()
+            }
+        }
+    }
+}
+
+// 新增：收藏项视图
+struct FavoriteItemView: View {
+    let item: HistoryItem
+    let onSelect: () -> Void
+    let onHover: (HistoryItem?) -> Void
+    let onUnfavorite: () -> Void
+    @ObservedObject private var clipboardManager = ClipboardManager.shared
+    @State private var animationProgress: CGFloat = 0
+    @State private var startTrim: CGFloat = 0
+    @State private var animationID = UUID()
+
+    var body: some View {
+        HStack(spacing: 12) {
+            contentPreview
+
+            Spacer()
+
+            unfavoriteButton
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color(NSColor.textBackgroundColor))
+        )
+        .overlay(
+            ZStack {
+                // 基础边框
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
+
+                // 选中时的渐变边框效果
+            }
+        )
+        .onTapGesture { location in
+            // 根据点击位置计算起始位置（0到1）
+            let width = 400.0 // 假设宽度
+            startTrim = max(0, min(1, location.x / width))
+            animationID = UUID()
+            animationProgress = 0
+            onSelect()
+            clipboardManager.copyToClipboard(item: item)
+            onHover(nil)
+            PreviewWindowManager.shared.hidePreview()
+
+            // 启动动画
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                withAnimation(.linear(duration: 0.8)) {
+                    animationProgress = 1
+                }
+            }
+        }
+        .onHover { isHovered in
+            if isHovered {
+                NSCursor.pointingHand.push()
+                onHover(item)
+            } else {
+                NSCursor.pop()
+                onHover(nil)
+            }
+        }
+    }
+
+    private var contentPreview: some View {
+        HStack(spacing: 12) {
+            typeIcon
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(item.displayText)
+                        .font(.system(size: 13))
+                        .foregroundColor(.primary)
+                        .lineLimit(2)
+
+                    Spacer()
+                }
+            }
+        }
+    }
+
+    private var typeIcon: some View {
+        VStack {
+            if item.contentType == .text {
+                Image(systemName: "doc.text")
+                    .font(.system(size: 16))
+                    .foregroundColor(.blue)
+            } else if item.contentType == .image {
+                Image(systemName: "photo")
+                    .font(.system(size: 16))
+                    .foregroundColor(.green)
+            } else if item.contentType == .file {
+                // 根据文件扩展名显示不同的图标
+                Image(systemName: fileIconName(for: item.fileName))
+                    .font(.system(size: 16))
+                    .foregroundColor(.orange)
+            }
+        }
+        .frame(width: 32, height: 32)
+        .background(Color(NSColor.controlBackgroundColor))
+        .cornerRadius(6)
+    }
+
+    private func fileIconName(for fileName: String?) -> String {
+        guard let name = fileName else {
+            return "paperplane.fill" // 默认文件图标
+        }
+
+        let ext = (name as NSString).pathExtension.lowercased()
+
+        // 图片文件
+        if ["jpg", "jpeg", "png", "gif", "bmp", "tiff"].contains(ext) {
+            return "photo.fill"
+        }
+
+        // 文档文件
+        if ["pdf", "doc", "docx", "txt", "rtf", "html", "htm"].contains(ext) {
+            return "doc.fill"
+        }
+
+        // 代码文件
+        if ["swift", "java", "py", "js", "html", "css", "php", "rb", "go", "c", "cpp"].contains(ext) {
+            return "chevron.left.forwardslash.chevron.right"
+        }
+
+        // 压缩文件
+        if ["zip", "rar", "7z", "tar", "gz"].contains(ext) {
+            return "folder.fill.badge.questionmark"
+        }
+
+        // 视频文件
+        if ["mp4", "mov", "avi", "mkv", "flv"].contains(ext) {
+            return "video.fill"
+        }
+
+        // 音频文件
+        if ["mp3", "wav", "aac", "m4a"].contains(ext) {
+            return "music.note"
+        }
+
+        // 文件夹
+        if ext.isEmpty || ["folder", "dir"].contains(ext) {
+            return "folder.fill"
+        }
+
+        return "paperplane.fill" // 默认文件图标
+    }
+
+    private var unfavoriteButton: some View {
+        Button(action: {
+            onUnfavorite()
+        }) {
+            Image(systemName: "star.slash.fill")
+                .font(.system(size: 12))
+                .foregroundColor(.yellow)
                 .padding(6)
                 .background(Color(NSColor.controlBackgroundColor))
                 .cornerRadius(4)

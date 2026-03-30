@@ -19,6 +19,7 @@ struct HistoryItem: Identifiable, Codable, Equatable {
     let fileName: String?       // 文件名（文件类型时）
     let fileURL: String?        // 文件URL（文件类型时）
     let timestamp: Date         // 时间戳
+    var isFavorite: Bool        // 是否为收藏项
 
     /// 完整初始化方法
     /// - Parameters:
@@ -35,6 +36,7 @@ struct HistoryItem: Identifiable, Codable, Equatable {
         self.fileName = nil
         self.fileURL = nil
         self.timestamp = timestamp
+        self.isFavorite = false
     }
 
     /// 完整初始化方法（带文件名）
@@ -54,6 +56,7 @@ struct HistoryItem: Identifiable, Codable, Equatable {
         self.fileName = fileName
         self.fileURL = fileURL
         self.timestamp = timestamp
+        self.isFavorite = false
     }
 
     /// 便捷初始化方法 - 用于文本内容
@@ -66,6 +69,7 @@ struct HistoryItem: Identifiable, Codable, Equatable {
         self.fileName = nil
         self.fileURL = nil
         self.timestamp = Date()
+        self.isFavorite = false
     }
 
     /// 便捷初始化方法 - 用于图片内容
@@ -78,6 +82,7 @@ struct HistoryItem: Identifiable, Codable, Equatable {
         self.fileName = nil
         self.fileURL = nil
         self.timestamp = Date()
+        self.isFavorite = false
     }
 
     /// 便捷初始化方法 - 用于文件内容
@@ -90,6 +95,7 @@ struct HistoryItem: Identifiable, Codable, Equatable {
         self.fileName = fileURL.lastPathComponent
         self.fileURL = fileURL.absoluteString
         self.timestamp = Date()
+        self.isFavorite = false
     }
 
     /// 获取图片对象

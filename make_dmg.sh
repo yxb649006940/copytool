@@ -7,7 +7,7 @@ set -e
 
 # 配置
 APP_NAME="copytool"
-VERSION="1.4.1"
+VERSION="1.5.0"
 BUILD_DIR="/Users/yuhoo/Library/Developer/Xcode/DerivedData/copytool-czqniqfdynuutaeknmdhjyeyfufj/Build/Products/Release"
 DMG_NAME="${APP_NAME}-${VERSION}.dmg"
 DMG_DIR="dmg_temp"
