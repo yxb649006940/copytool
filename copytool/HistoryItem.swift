@@ -21,6 +21,31 @@ struct HistoryItem: Identifiable, Codable, Equatable {
     let timestamp: Date         // 时间戳
     var isFavorite: Bool        // 是否为收藏项
 
+    /// 自定义编码/解码键
+    enum CodingKeys: String, CodingKey {
+        case id
+        case contentType
+        case textContent
+        case imageData
+        case fileName
+        case fileURL
+        case timestamp
+        case isFavorite
+    }
+
+    /// 自定义解码器，为缺少的字段提供默认值
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        contentType = try container.decode(ContentType.self, forKey: .contentType)
+        textContent = try container.decodeIfPresent(String.self, forKey: .textContent)
+        imageData = try container.decodeIfPresent(Data.self, forKey: .imageData)
+        fileName = try container.decodeIfPresent(String.self, forKey: .fileName)
+        fileURL = try container.decodeIfPresent(String.self, forKey: .fileURL)
+        timestamp = try container.decode(Date.self, forKey: .timestamp)
+        isFavorite = try container.decodeIfPresent(Bool.self, forKey: .isFavorite) ?? false
+    }
+
     /// 完整初始化方法
     /// - Parameters:
     ///   - id: 唯一标识符

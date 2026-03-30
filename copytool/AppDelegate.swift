@@ -9,6 +9,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     var statusItem: NSStatusItem?          // 菜单栏状态项
     private(set) var mainWindow: NSWindow? // 主窗口（替代 popover）
+    private var settingsWindow: NSWindow?  // 设置窗口
     var eventMonitors: [Any] = []         // 事件监听器数组
     private var eventTap: CFMachPort?     // CGEventTap 句柄
     private var eventTapRunLoopSource: CFRunLoopSource?  // EventTap 的 RunLoop 源
@@ -28,6 +29,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NotificationCenter.default.addObserver(self, selector: #selector(settingsChanged), name: NSNotification.Name("SettingsChanged"), object: nil)
         // 监听打开设置窗口的通知
         NotificationCenter.default.addObserver(self, selector: #selector(openSettingsFromPopover), name: NSNotification.Name("OpenSettings"), object: nil)
+        // 监听窗口关闭事件，确保设置窗口也一起关闭
+        NotificationCenter.default.addObserver(self, selector: #selector(mainWindowWillClose), name: NSWindow.willCloseNotification, object: nil)
         // 监听窗口置顶设置变化
         NotificationCenter.default.addObserver(self, selector: #selector(windowAlwaysOnTopChanged), name: NSNotification.Name("WindowAlwaysOnTopChanged"), object: nil)
     }
@@ -415,9 +418,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func showSettings() {
         DispatchQueue.main.async {
             // 检查是否已有设置窗口打开
-            for window in NSApp.windows where window.title == "设置" && window.isVisible {
-                window.level = .modalPanel
-                window.makeKeyAndOrderFront(nil)
+            if let existingWindow = self.settingsWindow, existingWindow.isVisible {
+                existingWindow.makeKeyAndOrderFront(nil)
                 NSApp.activate(ignoringOtherApps: true)
                 return
             }
@@ -434,7 +436,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             settingsWindow.maxSize = NSSize(width: 500, height: 620)
             settingsWindow.center()
             settingsWindow.isReleasedWhenClosed = false
-            settingsWindow.level = .modalPanel
+            settingsWindow.level = .normal // 设置为普通层级，不一直置顶
 
             let settingsView = SettingsView(onClose: {
                 settingsWindow.close()
@@ -443,6 +445,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             settingsWindow.title = "设置"
             settingsWindow.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
+
+            // 保存设置窗口的引用
+            self.settingsWindow = settingsWindow
         }
     }
 
@@ -477,6 +482,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 saveWindowState(window: mainWindow)
                 PreviewWindowManager.shared.hidePreview()
                 mainWindow.orderOut(nil)
+
+                // 同时关闭设置窗口（如果打开）
+                if let settingsWindow = self.settingsWindow, settingsWindow.isVisible {
+                    settingsWindow.orderOut(nil)
+                    self.settingsWindow = nil
+                }
+
                 print("✅ Window closed")
             } else {
                 // 窗口已显示但不是 key window - 让它到前方但保持原有的置顶设置
@@ -598,6 +610,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func windowAlwaysOnTopChanged() {
         DispatchQueue.main.async {
             self.updateWindowLevel()
+        }
+    }
+
+    /// 主窗口即将关闭时的处理
+    @objc private func mainWindowWillClose(notification: Notification) {
+        // 如果是主窗口关闭，则同时关闭设置窗口（如果打开）
+        if let window = notification.object as? NSWindow, window === mainWindow {
+            if let settingsWindow = self.settingsWindow, settingsWindow.isVisible {
+                settingsWindow.orderOut(nil)
+                self.settingsWindow = nil
+            }
         }
     }
 
