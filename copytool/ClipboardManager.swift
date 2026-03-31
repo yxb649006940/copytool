@@ -74,7 +74,17 @@ class ClipboardManager: ObservableObject {
                 if let items = loadedItems {
                     // 过滤掉过期的记录
                     let settings = SettingsManager.shared
-                    self.history = items.filter { !settings.isItemExpired(timestamp: $0.timestamp) }
+                    var filteredItems = items.filter { !settings.isItemExpired(timestamp: $0.timestamp) }
+
+                    // 确保历史记录中的 isFavorite 属性与收藏列表同步
+                    filteredItems = filteredItems.map { item in
+                        var mutableItem = item
+                        // 检查该项目是否在收藏列表中
+                        mutableItem.isFavorite = favoriteItems.contains { $0.id == item.id }
+                        return mutableItem
+                    }
+
+                    self.history = filteredItems
                 }
 
                 self.favorites = favoriteItems
