@@ -32,10 +32,9 @@ class PreviewWindowManager {
         // 重置隐藏状态标志
         isHiding = false
 
-        // 检查是否是图片或文本类型，或者是图片格式的文件
+        // 检查是否是图片或文本类型，但文件类型（包括图片文件）不显示预览
         let shouldShowPreview = item.contentType == .text ||
-                                 item.contentType == .image ||
-                                 isImageFileItem(item)
+                                 item.contentType == .image
 
         guard shouldShowPreview else {
             hidePreview()
