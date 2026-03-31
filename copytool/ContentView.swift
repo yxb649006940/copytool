@@ -24,6 +24,15 @@ struct ContentView: View {
         }
     }
 
+    var filteredFavorites: [HistoryItem] {
+        if searchText.isEmpty {
+            return clipboardManager.favorites
+        }
+        return clipboardManager.favorites.filter { item in
+            item.displayText.lowercased().contains(searchText.lowercased())
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             headerView
@@ -73,6 +82,12 @@ struct ContentView: View {
                 scrollToTop = true
             }
             previousHistoryCount = newCount
+        }
+        .onChange(of: searchText) { oldText, newText in
+            // 当搜索文本变化时（特别是清空搜索时），标记需要滚动到顶部
+            if oldText != newText {
+                scrollToTop = true
+            }
         }
         // 当主窗口消失时，确保预览窗口也隐藏
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didHideNotification)) { _ in
@@ -398,28 +413,46 @@ struct ContentView: View {
     // 新增：收藏列表视图
     private var favoritesListView: some View {
         Group {
-            if clipboardManager.favorites.isEmpty {
-                VStack(spacing: 16) {
-                    Image(systemName: "star")
-                        .font(.system(size: 48))
-                        .foregroundColor(.secondary)
+            if filteredFavorites.isEmpty {
+                if searchText.isEmpty {
+                    VStack(spacing: 16) {
+                        Image(systemName: "star")
+                            .font(.system(size: 48))
+                            .foregroundColor(.secondary)
 
-                    Text("暂无收藏记录")
-                        .font(.headline)
-                        .foregroundColor(.secondary)
+                        Text("暂无收藏记录")
+                            .font(.headline)
+                            .foregroundColor(.secondary)
 
-                    Text("点击剪贴记录上的星标按钮来添加收藏")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary.opacity(0.6))
+                        Text("点击剪贴记录上的星标按钮来添加收藏")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary.opacity(0.6))
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding()
+                } else {
+                    VStack(spacing: 16) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.system(size: 48))
+                            .foregroundColor(.secondary)
+
+                        Text("未找到匹配的收藏")
+                            .font(.headline)
+                            .foregroundColor(.secondary)
+
+                        Text("尝试使用其他关键词搜索")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary.opacity(0.6))
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding()
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding()
             } else {
                 // 使用 ScrollViewReader 来控制滚动位置
                 ScrollViewReader { proxy in
                     // 使用 List 替代 ScrollView + VStack，利用懒加载优化性能
                     List {
-                        ForEach(clipboardManager.favorites) { item in
+                        ForEach(filteredFavorites) { item in
                             // 使用 item.id 直接查找原始索引，减少遍历次数
                             FavoriteItemView(
                                 item: item,
@@ -445,8 +478,15 @@ struct ContentView: View {
                     }
                     .onAppear {
                         // 窗口出现时，滚动到顶部（显示最新记录）
-                        if let firstItem = clipboardManager.favorites.first {
+                        if let firstItem = filteredFavorites.first {
                             proxy.scrollTo(firstItem.id, anchor: .top)
+                        }
+                    }
+                    .onChange(of: scrollToTop) { _, shouldScroll in
+                        // 当需要滚动到顶部时
+                        if shouldScroll, let firstItem = filteredFavorites.first {
+                            proxy.scrollTo(firstItem.id, anchor: .top)
+                            scrollToTop = false
                         }
                     }
                 }
