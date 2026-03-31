@@ -185,7 +185,21 @@ class ClipboardManager: ObservableObject {
 
         clipboardObserver = pasteboard.changeCount
 
-        // 优化判断顺序：先检查是否是图片
+        // 优化判断顺序：先检查是否是文件
+        if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: nil) as? [URL],
+           !urls.isEmpty {
+            let fileURL = urls.first!
+            if fileURL != lastFileURL {
+                print("识别到文件类型")
+                addToHistory(fileURL: fileURL)
+                lastFileURL = fileURL
+                lastText = nil
+                lastImageData = nil
+                return
+            }
+        }
+
+        // 再检查是否是图片
         if let image = pasteboard.readObjects(forClasses: [NSImage.self], options: nil)?.first as? NSImage {
             let imageData = image.tiffRepresentation
             if imageData != lastImageData {
@@ -198,7 +212,7 @@ class ClipboardManager: ObservableObject {
             }
         }
 
-        // 再检查是否是文本
+        // 最后检查是否是文本
         if let string = pasteboard.string(forType: .string) {
             if string != lastText {
                 print("识别到文本类型")
@@ -206,20 +220,6 @@ class ClipboardManager: ObservableObject {
                 lastText = string
                 lastImageData = nil
                 lastFileURL = nil
-                return
-            }
-        }
-
-        // 最后检查是否是文件
-        if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: nil) as? [URL],
-           !urls.isEmpty {
-            let fileURL = urls.first!
-            if fileURL != lastFileURL {
-                print("识别到文件类型")
-                addToHistory(fileURL: fileURL)
-                lastFileURL = fileURL
-                lastText = nil
-                lastImageData = nil
                 return
             }
         }
