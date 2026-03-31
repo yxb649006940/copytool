@@ -215,19 +215,6 @@ class ClipboardManager: ObservableObject {
            !urls.isEmpty {
             let fileURL = urls.first!
             if fileURL != lastFileURL {
-                // 检查这个URL是否可能是图片文件
-                let isImageFile = self.isImageFile(url: fileURL)
-                if isImageFile {
-                    // 如果是图片文件，尝试读取其内容作为图片
-                    if let image = NSImage(contentsOf: fileURL) {
-                        print("识别到图片文件类型")
-                        addToHistory(image: image)
-                        lastImageData = image.tiffRepresentation
-                        lastText = nil
-                        lastFileURL = nil
-                        return
-                    }
-                }
                 print("识别到文件类型")
                 addToHistory(fileURL: fileURL)
                 lastFileURL = fileURL
