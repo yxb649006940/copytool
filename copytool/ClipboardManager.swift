@@ -76,18 +76,39 @@ class ClipboardManager: ObservableObject {
                     let settings = SettingsManager.shared
                     var filteredItems = items.filter { !settings.isItemExpired(timestamp: $0.timestamp) }
 
-                    // 确保历史记录中的 isFavorite 属性与收藏列表同步
-                    filteredItems = filteredItems.map { item in
-                        var mutableItem = item
-                        // 检查该项目是否在收藏列表中
-                        mutableItem.isFavorite = favoriteItems.contains { $0.id == item.id }
-                        return mutableItem
+                    // 处理从旧版本升级的情况：如果没有独立的收藏列表，则使用历史记录中的 isFavorite 属性
+                    var finalFavoriteItems = favoriteItems
+                    if finalFavoriteItems.isEmpty {
+                        // 从历史记录中提取所有 isFavorite = true 的项目作为收藏
+                        finalFavoriteItems = filteredItems.filter { $0.isFavorite }
+                        // 确保这些项目在 history 中的 isFavorite 属性保持 true
+                        filteredItems = filteredItems.map { item in
+                            var mutableItem = item
+                            mutableItem.isFavorite = finalFavoriteItems.contains { $0.id == item.id }
+                            return mutableItem
+                        }
+                    } else {
+                        // 如果有独立的收藏列表，确保历史记录中的 isFavorite 属性与收藏列表同步
+                        filteredItems = filteredItems.map { item in
+                            var mutableItem = item
+                            mutableItem.isFavorite = finalFavoriteItems.contains { $0.id == item.id }
+                            return mutableItem
+                        }
                     }
 
                     self.history = filteredItems
-                }
+                    self.favorites = finalFavoriteItems
 
-                self.favorites = favoriteItems
+                    // 确保收藏列表被正确保存（为了下次启动）
+                    if finalFavoriteItems.count > 0 {
+                        DispatchQueue.global(qos: .background).async { [weak self] in
+                            self?.saveHistory()
+                        }
+                    }
+                } else {
+                    // 如果没有历史记录，只设置收藏列表
+                    self.favorites = favoriteItems
+                }
             }
         }
     }
