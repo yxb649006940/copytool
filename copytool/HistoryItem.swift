@@ -103,7 +103,14 @@ struct HistoryItem: Identifiable, Codable, Equatable {
         self.id = UUID()
         self.contentType = .image
         self.textContent = nil
-        self.imageData = image.tiffRepresentation // 直接保存原始图片数据，不压缩
+        // 使用 JPEG 压缩图片，质量设置为 0.6 以平衡质量和内存占用
+        if let tiffData = image.tiffRepresentation,
+           let bitmap = NSBitmapImageRep(data: tiffData),
+           let jpegData = bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.6]) {
+            self.imageData = jpegData
+        } else {
+            self.imageData = image.tiffRepresentation
+        }
         self.fileName = nil
         self.fileURL = nil
         self.timestamp = Date()

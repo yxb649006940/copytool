@@ -33,6 +33,15 @@ struct ContentView: View {
         }
     }
 
+    // 建立 history 的 id 到索引的映射，避免频繁的 O(n) 查找
+    private var historyIdToIndexMap: [UUID: Int] {
+        var map = [UUID: Int]()
+        for (index, item) in clipboardManager.history.enumerated() {
+            map[item.id] = index
+        }
+        return map
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             headerView
@@ -300,9 +309,11 @@ struct ContentView: View {
                 ScrollViewReader { proxy in
                     // 使用 List 替代 ScrollView + VStack，利用懒加载优化性能
                     List {
+                        // 预计算 id 到索引的映射，只计算一次
+                        let idToIndexMap = historyIdToIndexMap
                         ForEach(filteredHistory) { item in
-                            // 使用 item.id 直接查找原始索引，减少遍历次数
-                            let originalIndex = clipboardManager.history.firstIndex(where: { $0.id == item.id }) ?? 0
+                            // 使用预计算的 id 到索引的映射，O(1) 查找
+                            let originalIndex = idToIndexMap[item.id] ?? 0
                             HistoryItemView(
                                 item: item,
                                 index: originalIndex,

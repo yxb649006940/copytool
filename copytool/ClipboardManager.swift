@@ -15,6 +15,10 @@ class ClipboardManager: ObservableObject {
     private var lastImageData: Data?
     private var lastFileURL: URL?
 
+    // 防抖保存相关
+    private var saveWorkItem: DispatchWorkItem?
+    private let saveDebounceInterval: TimeInterval = 2.0  // 2秒防抖
+
     static let shared = ClipboardManager()  // 单例实例
 
     private init() {
@@ -72,9 +76,16 @@ class ClipboardManager: ObservableObject {
             // 在主线程更新UI
             DispatchQueue.main.async {
                 if let items = loadedItems {
-                    // 过滤掉过期的记录
+                    // 过滤掉过期的记录，但保留收藏项
                     let settings = SettingsManager.shared
-                    var filteredItems = items.filter { !settings.isItemExpired(timestamp: $0.timestamp) }
+                    var filteredItems = items.filter { item in
+                        // 保留所有收藏项，无论是否过期
+                        if item.isFavorite {
+                            return true
+                        }
+                        // 非收藏项根据设置判断是否过期
+                        return !settings.isItemExpired(timestamp: item.timestamp)
+                    }
 
                     // 处理从旧版本升级的情况：如果没有独立的收藏列表，则使用历史记录中的 isFavorite 属性
                     var finalFavoriteItems = favoriteItems
@@ -129,22 +140,33 @@ class ClipboardManager: ObservableObject {
         }
     }
 
-    /// 保存历史记录到本地存储（异步）
+    /// 保存历史记录到本地存储（带防抖）
     func saveHistory() {
-        DispatchQueue.global(qos: .background).async { [weak self] in
-            guard let self = self else { return }
+        // 取消之前的保存任务
+        saveWorkItem?.cancel()
 
-            if let data = try? JSONEncoder().encode(self.history) {
-                DispatchQueue.main.async {
-                    UserDefaults.standard.set(data, forKey: "clipboardHistory")
-                }
+        // 创建新的保存任务
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.performSave()
+        }
+        saveWorkItem = workItem
+
+        // 延迟执行
+        DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + saveDebounceInterval, execute: workItem)
+    }
+
+    /// 实际执行保存操作
+    private func performSave() {
+        if let data = try? JSONEncoder().encode(self.history) {
+            DispatchQueue.main.async {
+                UserDefaults.standard.set(data, forKey: "clipboardHistory")
             }
+        }
 
-            // 保存收藏列表
-            if let favoriteData = try? JSONEncoder().encode(self.favorites) {
-                DispatchQueue.main.async {
-                    UserDefaults.standard.set(favoriteData, forKey: "favoriteHistory")
-                }
+        // 保存收藏列表
+        if let favoriteData = try? JSONEncoder().encode(self.favorites) {
+            DispatchQueue.main.async {
+                UserDefaults.standard.set(favoriteData, forKey: "favoriteHistory")
             }
         }
     }
@@ -231,6 +253,9 @@ class ClipboardManager: ObservableObject {
         return imageExtensions.contains(fileExtension)
     }
 
+    // 历史记录最大数量限制
+    private let maxHistoryCount = 200
+
     private func addToHistory(text: String) {
         if history.first?.textContent == text {
             return
@@ -244,6 +269,10 @@ class ClipboardManager: ObservableObject {
         }
 
         history.insert(item, at: 0)
+
+        // 限制历史记录数量
+        trimHistoryIfNeeded()
+
         // 使用异步保存避免阻塞主线程
         DispatchQueue.global(qos: .background).async { [weak self] in
             self?.saveHistory()
@@ -266,6 +295,10 @@ class ClipboardManager: ObservableObject {
         }
 
         history.insert(item, at: 0)
+
+        // 限制历史记录数量
+        trimHistoryIfNeeded()
+
         // 使用异步保存避免阻塞主线程
         DispatchQueue.global(qos: .background).async { [weak self] in
             self?.saveHistory()
@@ -286,9 +319,31 @@ class ClipboardManager: ObservableObject {
         }
 
         history.insert(item, at: 0)
+
+        // 限制历史记录数量
+        trimHistoryIfNeeded()
+
         // 使用异步保存避免阻塞主线程
         DispatchQueue.global(qos: .background).async { [weak self] in
             self?.saveHistory()
+        }
+    }
+
+    /// 修剪历史记录，保持数量在限制范围内
+    private func trimHistoryIfNeeded() {
+        if history.count <= maxHistoryCount {
+            return
+        }
+
+        var itemsToRemove = history.count - maxHistoryCount
+        var index = history.count - 1
+
+        while itemsToRemove > 0 && index >= 0 {
+            if !history[index].isFavorite {
+                history.remove(at: index)
+                itemsToRemove -= 1
+            }
+            index -= 1
         }
     }
 
