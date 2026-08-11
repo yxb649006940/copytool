@@ -1,11 +1,12 @@
 import SwiftUI
 import Cocoa
 import CoreGraphics
+@preconcurrency import ApplicationServices
 
 /// 应用程序代理类
 /// 负责应用程序的生命周期管理、菜单栏设置、快捷键监听等
 class AppDelegate: NSObject, NSApplicationDelegate {
-    static var shared: AppDelegate!
+    static weak var shared: AppDelegate?
 
     var statusItem: NSStatusItem?          // 菜单栏状态项
     private(set) var mainWindow: NSWindow? // 主窗口（替代 popover）
@@ -13,9 +14,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var eventMonitors: [Any] = []         // 事件监听器数组
     private var eventTap: CFMachPort?     // CGEventTap 句柄
     private var eventTapRunLoopSource: CFRunLoopSource?  // EventTap 的 RunLoop 源
+    private var permissionCheckTimer: Timer?  // 辅助功能权限检查定时器
     private var eventTapCheckTimer: Timer?  // EventTap 状态检查定时器
     private var isProcessingHotkey = false  // 防止快捷键重复触发
-    private var wasTemporarilyToggled = false  // 标记窗口是否被临时置顶
+    private var isPreparingTermination = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppDelegate.shared = self
@@ -23,7 +25,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setupMainWindow()
         requestAccessibilityPermission()
         setupGlobalKeyboardMonitor()
-        checkAndCleanupLargeHistory()
 
         // 监听设置更改通知
         NotificationCenter.default.addObserver(self, selector: #selector(settingsChanged), name: NSNotification.Name("SettingsChanged"), object: nil)
@@ -33,16 +34,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NotificationCenter.default.addObserver(self, selector: #selector(mainWindowWillClose), name: NSWindow.willCloseNotification, object: nil)
         // 监听窗口置顶设置变化
         NotificationCenter.default.addObserver(self, selector: #selector(windowAlwaysOnTopChanged), name: NSNotification.Name("WindowAlwaysOnTopChanged"), object: nil)
-    }
-
-    /// 检查并清理过大的历史记录
-    private func checkAndCleanupLargeHistory() {
-        if let data = UserDefaults.standard.data(forKey: "clipboardHistory") {
-            if data.count >= 4 * 1024 * 1024 { // >=4MB
-                print("Warning: Clipboard history data too large (\(data.count) bytes), clearing all history")
-                UserDefaults.standard.removeObject(forKey: "clipboardHistory")
-            }
-        }
     }
 
     /// 设置菜单栏
@@ -78,6 +69,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func showMenu() {
         let menu = NSMenu()
         menu.addItem(withTitle: "显示历史记录", action: #selector(togglePanel), keyEquivalent: "h")
+        let monitoringTitle = SettingsManager.shared.monitoringEnabled ? "暂停记录" : "恢复记录"
+        menu.addItem(withTitle: monitoringTitle, action: #selector(toggleClipboardMonitoring), keyEquivalent: "")
         menu.addItem(NSMenuItem.separator())
         menu.addItem(withTitle: "设置", action: #selector(showSettings), keyEquivalent: ",")
         menu.addItem(NSMenuItem.separator())
@@ -86,6 +79,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem?.menu = menu
         statusItem?.button?.performClick(nil)
         statusItem?.menu = nil
+    }
+
+    @objc private func toggleClipboardMonitoring() {
+        SettingsManager.shared.monitoringEnabled.toggle()
+        NotificationCenter.default.post(name: NSNotification.Name("MonitoringChanged"), object: nil)
     }
 
     /// 设置主窗口（独立窗口）
@@ -168,23 +166,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// 设置权限检查定时器
     private func setupPermissionCheckTimer() {
-        // 每2秒检查一次权限
-        Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] timer in
-            guard let strongSelf = self else {
-                timer.invalidate()
-                return
-            }
+        permissionCheckTimer?.invalidate()
+        permissionCheckTimer = Timer.scheduledTimer(
+            timeInterval: 2.0,
+            target: self,
+            selector: #selector(checkAccessibilityPermission),
+            userInfo: nil,
+            repeats: true
+        )
+    }
 
-            let accessibilityEnabled = AXIsProcessTrusted()
-            print("检查辅助功能权限: \(accessibilityEnabled ? "已授予" : "未授予")")
-
-            if accessibilityEnabled {
-                // 权限已授予，停止定时器并重新设置键盘监控器
-                timer.invalidate()
-                print("权限已授予，重新设置键盘监控器")
-                strongSelf.setupGlobalKeyboardMonitor()
-            }
-        }
+    @objc private func checkAccessibilityPermission() {
+        guard AXIsProcessTrusted() else { return }
+        permissionCheckTimer?.invalidate()
+        permissionCheckTimer = nil
+        setupGlobalKeyboardMonitor()
     }
 
     /// 设置全局键盘监听器
@@ -213,30 +209,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// 处理全局 keyDown 事件（作为备用方案）
-    private func handleGlobalKeyDown(event: NSEvent) {
-        guard !isProcessingHotkey else {
-            return
-        }
-
-        let settings = SettingsManager.shared
-        let hotkey = settings.hotkey
-
-        // 检查是否匹配自定义快捷键
-        let isMatchingKeyCode = event.keyCode == hotkey.keyCode
-        let eventModifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
-        let isMatchingModifiers = eventModifiers == hotkey.modifierFlags
-
-        if isMatchingKeyCode && isMatchingModifiers {
-            // 这个备用方案只在主窗口不可见时才触发（避免重复触发）
-            if let mainWindow = mainWindow, !mainWindow.isVisible {
-                DispatchQueue.main.async { [weak self] in
-                    self?.togglePanel()
-                }
-            }
-        }
-    }
-
     /// 处理本地 keyDown 事件
     private func handleLocalKeyDown(event: NSEvent) -> NSEvent? {
         // 注意：如果有 EventTap 正在工作（辅助功能权限已授予），本地事件监听会被禁用
@@ -258,6 +230,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let isMatchingModifiers = eventModifiers == hotkey.modifierFlags
 
         if isMatchingKeyCode && isMatchingModifiers {
+            if event.isARepeat { return nil }
             DispatchQueue.main.async { [weak self] in
                 self?.togglePanel()
             }
@@ -296,7 +269,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             eventsOfInterest: CGEventMask(eventMask),
             callback: { proxy, type, event, refcon in
                 // 回调函数，处理事件
-                let appDelegate = Unmanaged<AppDelegate>.fromOpaque(refcon!).takeUnretainedValue()
+                guard let refcon else { return Unmanaged.passUnretained(event) }
+                let appDelegate = Unmanaged<AppDelegate>.fromOpaque(refcon).takeUnretainedValue()
                 return appDelegate.handleEventTap(proxy: proxy, type: type, event: event)
             },
             userInfo: Unmanaged.passUnretained(self).toOpaque()
@@ -323,14 +297,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// 设置 EventTap 状态检查定时器
     private func setupEventTapCheckTimer() {
         eventTapCheckTimer?.invalidate()
-        eventTapCheckTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] timer in
-            guard let self = self else {
-                timer.invalidate()
-                return
-            }
+        eventTapCheckTimer = Timer.scheduledTimer(
+            timeInterval: 30.0,
+            target: self,
+            selector: #selector(checkEventTap),
+            userInfo: nil,
+            repeats: true
+        )
+    }
 
-            self.checkEventTapValidity()
-        }
+    @objc private func checkEventTap() {
+        checkEventTapValidity()
     }
 
     /// 检查 EventTap 是否仍然有效
@@ -351,9 +328,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        // 额外的检查：尝试获取 EventTap 的事件类型
-        // 如果 EventTap 无效，这些调用可能会失败，但为了安全，我们不在这里进行
-        print("EventTap 状态检查 - 有效")
     }
 
     /// 清理 EventTap
@@ -361,27 +335,34 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         eventTapCheckTimer?.invalidate()
         eventTapCheckTimer = nil
 
-        if let tap = eventTap {
-            CGEvent.tapEnable(tap: tap, enable: false)
-            eventTap = nil
-        }
-
         if let runLoopSource = eventTapRunLoopSource {
             CFRunLoopRemoveSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
             eventTapRunLoopSource = nil
+        }
+
+        if let tap = eventTap {
+            CGEvent.tapEnable(tap: tap, enable: false)
+            eventTap = nil
         }
     }
 
     /// 处理 EventTap 回调
     private func handleEventTap(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            if let eventTap {
+                CGEvent.tapEnable(tap: eventTap, enable: true)
+            }
+            return Unmanaged.passUnretained(event)
+        }
+
         // 如果不是 keyDown 事件，直接返回
         if type != .keyDown {
-            return Unmanaged.passRetained(event)
+            return Unmanaged.passUnretained(event)
         }
 
         // 检查是否正在处理快捷键
         guard !isProcessingHotkey else {
-            return Unmanaged.passRetained(event)
+            return Unmanaged.passUnretained(event)
         }
 
         let settings = SettingsManager.shared
@@ -389,7 +370,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 获取按键信息
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
-        var flags = event.flags
+        let flags = event.flags
 
         // 提取我们关心的修饰键
         var modifierFlags: NSEvent.ModifierFlags = []
@@ -403,6 +384,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let isMatchingModifiers = modifierFlags == hotkey.modifierFlags
 
         if isMatchingKeyCode && isMatchingModifiers {
+            if event.getIntegerValueField(.keyboardEventAutorepeat) != 0 {
+                return nil
+            }
             // 匹配成功，处理快捷键并返回 nil 来阻止事件传递
             DispatchQueue.main.async { [weak self] in
                 self?.togglePanel()
@@ -411,7 +395,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // 不匹配，返回原始事件
-        return Unmanaged.passRetained(event)
+        return Unmanaged.passUnretained(event)
     }
 
     /// 显示设置窗口
@@ -466,19 +450,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         isProcessingHotkey = true
 
-        print("=== togglePanel() called ===")
-        print("Window visible: \(mainWindow.isVisible)")
-        print("Window level: \(mainWindow.level.rawValue)")
-        print("Floating level: \(NSWindow.Level.floating.rawValue)")
-        print("Window always on top setting: \(SettingsManager.shared.windowAlwaysOnTop)")
-        print("Window key: \(mainWindow.isKeyWindow)")
-        print("---------------------------")
-
         if mainWindow.isVisible {
             // 如果窗口是当前的 key window，则关闭；否则只让它到前方但不改变置顶状态
             if mainWindow.isKeyWindow {
                 // 窗口是当前的 key window - 关闭窗口
-                print("Window is key window - closing window")
                 saveWindowState(window: mainWindow)
                 PreviewWindowManager.shared.hidePreview()
                 mainWindow.orderOut(nil)
@@ -489,10 +464,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     self.settingsWindow = nil
                 }
 
-                print("✅ Window closed")
             } else {
                 // 窗口已显示但不是 key window - 让它到前方但保持原有的置顶设置
-                print("Window is visible but not key window - bringing to front")
                 // 恢复根据设置应该有的层级
                 if SettingsManager.shared.windowAlwaysOnTop {
                     mainWindow.level = .floating
@@ -501,11 +474,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 mainWindow.makeKeyAndOrderFront(nil)
                 NSApp.activate(ignoringOtherApps: true)
-                print("✅ Window has been brought to front")
             }
         } else {
             // 窗口未显示，显示窗口
-            print("Window not visible - showing window")
             if mainWindow.contentViewController == nil {
                 mainWindow.contentViewController = NSHostingController(rootView: ContentView())
             }
@@ -530,7 +501,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
             mainWindow.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
-            print("✅ Window has been shown")
         }
 
         // 重置状态（延迟时间缩短一点，让响应更迅速）
@@ -624,7 +594,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !isPreparingTermination else { return .terminateNow }
+        isPreparingTermination = true
+        Task { @MainActor in
+            await ClipboardManager.shared.flushHistory()
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
+        permissionCheckTimer?.invalidate()
+        permissionCheckTimer = nil
         eventMonitors.forEach { NSEvent.removeMonitor($0) }
         cleanupEventTap()
         NotificationCenter.default.removeObserver(self)

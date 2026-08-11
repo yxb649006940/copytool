@@ -1,14 +1,18 @@
 import SwiftUI
+import AppKit
 
 struct ContentView: View {
     @ObservedObject private var clipboardManager = ClipboardManager.shared
     @State private var searchText = ""
-    @State private var selectedIndex: Int?
+    @State private var selectedItemID: UUID?
     @State private var hoverItem: HistoryItem?
+    @State private var pendingHoverItem: HistoryItem?
+    @State private var isListScrolling = false
     @State private var windowAlwaysOnTop = SettingsManager.shared.windowAlwaysOnTop
+    @State private var monitoringEnabled = SettingsManager.shared.monitoringEnabled
     @State private var scrollToTop = false  // 标记是否需要滚动到顶部
-    @State private var previousHistoryCount: Int = 0  // 记录上一次的历史记录数量
     @State private var selectedTab: Tab = .history  // 当前选中的 tab
+    @State private var isShowingClearConfirmation = false
 
     enum Tab {
         case history
@@ -16,30 +20,11 @@ struct ContentView: View {
     }
 
     var filteredHistory: [HistoryItem] {
-        if searchText.isEmpty {
-            return clipboardManager.history
-        }
-        return clipboardManager.history.filter { item in
-            item.displayText.lowercased().contains(searchText.lowercased())
-        }
+        clipboardManager.history
     }
 
     var filteredFavorites: [HistoryItem] {
-        if searchText.isEmpty {
-            return clipboardManager.favorites
-        }
-        return clipboardManager.favorites.filter { item in
-            item.displayText.lowercased().contains(searchText.lowercased())
-        }
-    }
-
-    // 建立 history 的 id 到索引的映射，避免频繁的 O(n) 查找
-    private var historyIdToIndexMap: [UUID: Int] {
-        var map = [UUID: Int]()
-        for (index, item) in clipboardManager.history.enumerated() {
-            map[item.id] = index
-        }
-        return map
+        clipboardManager.favorites
     }
 
     var body: some View {
@@ -69,14 +54,20 @@ struct ContentView: View {
         }
         .background(Color(NSColor.windowBackgroundColor))
         .frame(minWidth: 400, minHeight: 400) // 添加最小尺寸限制
-        .onAppear {
-            // 打开面板时清理过期记录
-            clipboardManager.cleanExpiredItems()
-            // 初始化历史记录数量
-            previousHistoryCount = clipboardManager.history.count
-        }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("WindowAlwaysOnTopChanged"))) { _ in
             windowAlwaysOnTop = SettingsManager.shared.windowAlwaysOnTop
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("MonitoringChanged"))) { _ in
+            monitoringEnabled = SettingsManager.shared.monitoringEnabled
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSScrollView.willStartLiveScrollNotification)) { _ in
+            isListScrolling = true
+            hoverItem = nil
+            PreviewWindowManager.shared.hidePreview()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSScrollView.didEndLiveScrollNotification)) { _ in
+            isListScrolling = false
+            hoverItem = pendingHoverItem
         }
         .onChange(of: hoverItem) { oldItem, newItem in
             if let item = newItem {
@@ -90,28 +81,44 @@ struct ContentView: View {
             if newCount > oldCount {
                 scrollToTop = true
             }
-            previousHistoryCount = newCount
         }
         .onChange(of: searchText) { oldText, newText in
-            // 当搜索文本变化时（特别是清空搜索时），标记需要滚动到顶部
             if oldText != newText {
                 scrollToTop = true
+                if selectedTab == .history {
+                    clipboardManager.searchHistory(newText)
+                } else {
+                    clipboardManager.searchFavorites(newText)
+                }
+            }
+        }
+        .onChange(of: selectedTab) { _, newTab in
+            if newTab == .history {
+                clipboardManager.searchHistory(searchText)
+            } else {
+                clipboardManager.searchFavorites(searchText)
             }
         }
         // 当主窗口消失时，确保预览窗口也隐藏
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didHideNotification)) { _ in
-            hoverItem = nil
-            PreviewWindowManager.shared.hidePreview()
+            clearHoverPreview()
         }
         // 当应用失去焦点时，确保预览窗口也隐藏
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
-            hoverItem = nil
-            PreviewWindowManager.shared.hidePreview()
+            clearHoverPreview()
         }
         // 当窗口即将关闭时隐藏预览
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.willCloseNotification)) { _ in
-            hoverItem = nil
-            PreviewWindowManager.shared.hidePreview()
+            clearHoverPreview()
+        }
+        .alert("清空所有记录？", isPresented: $isShowingClearConfirmation) {
+            Button("取消", role: .cancel) {}
+            Button("清空", role: .destructive) {
+                clipboardManager.clearAll()
+                selectedItemID = nil
+            }
+        } message: {
+            Text("此操作会同时删除历史和收藏，且无法撤销。")
         }
     }
 
@@ -119,6 +126,18 @@ struct ContentView: View {
         DispatchQueue.main.async {
             NotificationCenter.default.post(name: NSNotification.Name("OpenSettings"), object: nil)
         }
+    }
+
+    private func updateHoverPreview(_ item: HistoryItem?) {
+        pendingHoverItem = item
+        guard !isListScrolling else { return }
+        hoverItem = item
+    }
+
+    private func clearHoverPreview() {
+        pendingHoverItem = nil
+        hoverItem = nil
+        PreviewWindowManager.shared.hidePreview()
     }
 
     // 新增：Tab 导航视图
@@ -134,7 +153,7 @@ struct ContentView: View {
                         .font(.system(size: 14, weight: .medium))
                     Text("剪贴记录")
                         .font(.system(size: 13, weight: .medium))
-                    Text("\(clipboardManager.history.count)")
+                    Text("\(clipboardManager.historyTotalCount)")
                         .font(.system(size: 11, weight: .semibold))
                         .padding(.horizontal, 5)
                         .padding(.vertical, 2)
@@ -173,7 +192,7 @@ struct ContentView: View {
                         .font(.system(size: 14, weight: .medium))
                     Text("收藏")
                         .font(.system(size: 13, weight: .medium))
-                    Text("\(clipboardManager.favorites.count)")
+                    Text("\(clipboardManager.favoriteTotalCount)")
                         .font(.system(size: 11, weight: .semibold))
                         .padding(.horizontal, 5)
                         .padding(.vertical, 2)
@@ -212,6 +231,16 @@ struct ContentView: View {
                 Text("剪贴板历史记录")
                     .font(.headline)
                     .foregroundColor(.primary)
+
+                if !monitoringEnabled {
+                    Text("已暂停")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(.orange)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(Color.orange.opacity(0.12))
+                        .clipShape(Capsule())
+                }
 
                 Spacer()
 
@@ -258,7 +287,7 @@ struct ContentView: View {
                     }
                     .help("设置")
 
-                    Text("共 \(clipboardManager.history.count) 条记录")
+                    Text("共 \(selectedTab == .history ? clipboardManager.historyTotalCount : clipboardManager.favoriteTotalCount) 条记录")
                         .font(.footnote)
                         .foregroundColor(.secondary)
                 }
@@ -298,7 +327,10 @@ struct ContentView: View {
 
     private var historyListView: some View {
         Group {
-            if filteredHistory.isEmpty {
+            if filteredHistory.isEmpty && clipboardManager.isLoadingHistory {
+                ProgressView("正在加载…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if filteredHistory.isEmpty {
                 if searchText.isEmpty {
                     emptyStateView
                 } else {
@@ -309,35 +341,49 @@ struct ContentView: View {
                 ScrollViewReader { proxy in
                     // 使用 List 替代 ScrollView + VStack，利用懒加载优化性能
                     List {
-                        // 预计算 id 到索引的映射，只计算一次
-                        let idToIndexMap = historyIdToIndexMap
                         ForEach(filteredHistory) { item in
-                            // 使用预计算的 id 到索引的映射，O(1) 查找
-                            let originalIndex = idToIndexMap[item.id] ?? 0
                             HistoryItemView(
                                 item: item,
-                                index: originalIndex,
-                                isSelected: selectedIndex == originalIndex,
+                                isSelected: selectedItemID == item.id,
                                 onSelect: {
-                                    selectedIndex = originalIndex
+                                    selectedItemID = item.id
                                 },
                                 onHover: { hoverItem in
-                                    self.hoverItem = hoverItem
+                                    updateHoverPreview(hoverItem)
+                                },
+                                onCopy: {
+                                    clipboardManager.copyToClipboard(item: item)
                                 },
                                 onToggleFavorite: {
                                     clipboardManager.toggleFavorite(item: item)
+                                },
+                                onDelete: {
+                                    clipboardManager.removeItem(id: item.id)
                                 }
                             )
                             .listRowSeparator(.hidden)
                             .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
                             .id(item.id)  // 为每个项目添加 id 用于滚动定位
                         }
+                        if clipboardManager.hasMoreHistory {
+                            HStack {
+                                Spacer()
+                                ProgressView()
+                                    .controlSize(.small)
+                                Spacer()
+                            }
+                            .padding(.vertical, 8)
+                            .listRowSeparator(.hidden)
+                            .onAppear {
+                                clipboardManager.loadMoreHistory()
+                            }
+                        }
                     }
                     .listStyle(.plain)
                     .onHover { isHovered in
                         // 当鼠标离开整个列表区域时，确保预览窗口关闭
                         if !isHovered {
-                            hoverItem = nil
+                            updateHoverPreview(nil)
                         }
                     }
                     .onAppear {
@@ -403,7 +449,7 @@ struct ContentView: View {
     private var footerView: some View {
         HStack {
             Button(action: {
-                clipboardManager.clearAll()
+                isShowingClearConfirmation = true
             }) {
                 HStack(spacing: 6) {
                     Image(systemName: "trash")
@@ -424,7 +470,10 @@ struct ContentView: View {
     // 新增：收藏列表视图
     private var favoritesListView: some View {
         Group {
-            if filteredFavorites.isEmpty {
+            if filteredFavorites.isEmpty && clipboardManager.isLoadingFavorites {
+                ProgressView("正在加载…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if filteredFavorites.isEmpty {
                 if searchText.isEmpty {
                     VStack(spacing: 16) {
                         Image(systemName: "star")
@@ -467,9 +516,15 @@ struct ContentView: View {
                             // 使用 item.id 直接查找原始索引，减少遍历次数
                             FavoriteItemView(
                                 item: item,
-                                onSelect: { /* 处理选择 */ },
+                                isSelected: selectedItemID == item.id,
+                                onSelect: {
+                                    selectedItemID = item.id
+                                },
                                 onHover: { hoverItem in
-                                    self.hoverItem = hoverItem
+                                    updateHoverPreview(hoverItem)
+                                },
+                                onCopy: {
+                                    clipboardManager.copyToClipboard(item: item)
                                 },
                                 onUnfavorite: {
                                     clipboardManager.toggleFavorite(item: item)
@@ -479,12 +534,25 @@ struct ContentView: View {
                             .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
                             .id(item.id)  // 为每个项目添加 id 用于滚动定位
                         }
+                        if clipboardManager.hasMoreFavorites {
+                            HStack {
+                                Spacer()
+                                ProgressView()
+                                    .controlSize(.small)
+                                Spacer()
+                            }
+                            .padding(.vertical, 8)
+                            .listRowSeparator(.hidden)
+                            .onAppear {
+                                clipboardManager.loadMoreFavorites()
+                            }
+                        }
                     }
                     .listStyle(.plain)
                     .onHover { isHovered in
                         // 当鼠标离开整个列表区域时，确保预览窗口关闭
                         if !isHovered {
-                            hoverItem = nil
+                            updateHoverPreview(nil)
                         }
                     }
                     .onAppear {
@@ -506,17 +574,47 @@ struct ContentView: View {
     }
 }
 
+private struct ClipboardRowSelectionModifier: ViewModifier {
+    let isSelected: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(
+                        isSelected
+                            ? Color.accentColor.opacity(0.11)
+                            : Color(NSColor.textBackgroundColor)
+                    )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(
+                        isSelected
+                            ? Color.accentColor.opacity(0.85)
+                            : Color(NSColor.separatorColor),
+                        lineWidth: isSelected ? 1.4 : 0.5
+                    )
+            )
+            .shadow(
+                color: Color.accentColor.opacity(isSelected ? 0.16 : 0),
+                radius: isSelected ? 5 : 0,
+                x: 0,
+                y: 1
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 10))
+            .animation(.easeOut(duration: 0.18), value: isSelected)
+    }
+}
+
 struct HistoryItemView: View {
     let item: HistoryItem
-    let index: Int
     let isSelected: Bool
     let onSelect: () -> Void
     let onHover: (HistoryItem?) -> Void
+    let onCopy: () -> Void
     let onToggleFavorite: () -> Void  // 新增：收藏按钮回调
-    @ObservedObject private var clipboardManager = ClipboardManager.shared
-    @State private var animationProgress: CGFloat = 0
-    @State private var startTrim: CGFloat = 0
-    @State private var animationID = UUID()
+    let onDelete: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
@@ -530,66 +628,11 @@ struct HistoryItemView: View {
             deleteButton
         }
         .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color(NSColor.textBackgroundColor))
-        )
-        .overlay(
-            ZStack {
-                // 基础边框
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
-
-                // 选中时的渐变边框效果
-                if isSelected {
-                    RoundedRectangle(cornerRadius: 8)
-                        .inset(by: 1)
-                        .stroke(
-                            LinearGradient(
-                                gradient: Gradient(colors: [
-                                    Color.blue.opacity(0),
-                                    Color.blue.opacity(0.6),
-                                    Color.blue.opacity(1),
-                                    Color.blue.opacity(1),
-                                    Color.blue.opacity(0.6),
-                                    Color.blue.opacity(0)
-                                ]),
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
-                            style: StrokeStyle(lineWidth: 1.2, lineCap: .round)
-                        )
-                        .shadow(color: .blue.opacity(0.4 * animationProgress), radius: 4 * animationProgress, x: 0, y: 0)
-                        .opacity(animationProgress)
-                        .id(animationID)
-                        .onAppear {
-                            animationProgress = 0
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) {
-                                withAnimation(.easeOut(duration: 0.6)) {
-                                    animationProgress = 1
-                                }
-                            }
-                        }
-                }
-            }
-        )
-        .onTapGesture { location in
-            // 根据点击位置计算起始位置（0到1）
-            let width = 400.0 // 假设宽度
-            startTrim = max(0, min(1, location.x / width))
-            animationID = UUID()
-            animationProgress = 0
+        .modifier(ClipboardRowSelectionModifier(isSelected: isSelected))
+        .onTapGesture {
             onSelect()
-            clipboardManager.copyToClipboard(item: item)
+            onCopy()
             onHover(nil)
-            PreviewWindowManager.shared.hidePreview()
-
-            // 启动动画
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                withAnimation(.linear(duration: 0.8)) {
-                    animationProgress = 1
-                }
-            }
         }
         .onHover { isHovered in
             if isHovered {
@@ -598,21 +641,6 @@ struct HistoryItemView: View {
             } else {
                 NSCursor.pop()
                 onHover(nil)
-                // 额外调用一次 hidePreview 确保窗口被隐藏
-                PreviewWindowManager.shared.hidePreview()
-            }
-        }
-        .onChange(of: isSelected) { _, selected in
-            if selected {
-                animationID = UUID()
-                animationProgress = 0
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                    withAnimation(.linear(duration: 0.8)) {
-                        animationProgress = 1
-                    }
-                }
-            } else {
-                animationProgress = 0
             }
         }
     }
@@ -725,7 +753,7 @@ struct HistoryItemView: View {
 
     private var deleteButton: some View {
         Button(action: {
-            clipboardManager.removeItem(at: index)
+            onDelete()
         }) {
             Image(systemName: "xmark")
                 .font(.system(size: 12))
@@ -748,13 +776,11 @@ struct HistoryItemView: View {
 // 新增：收藏项视图
 struct FavoriteItemView: View {
     let item: HistoryItem
+    let isSelected: Bool
     let onSelect: () -> Void
     let onHover: (HistoryItem?) -> Void
+    let onCopy: () -> Void
     let onUnfavorite: () -> Void
-    @ObservedObject private var clipboardManager = ClipboardManager.shared
-    @State private var animationProgress: CGFloat = 0
-    @State private var startTrim: CGFloat = 0
-    @State private var animationID = UUID()
 
     var body: some View {
         HStack(spacing: 12) {
@@ -765,36 +791,11 @@ struct FavoriteItemView: View {
             unfavoriteButton
         }
         .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color(NSColor.textBackgroundColor))
-        )
-        .overlay(
-            ZStack {
-                // 基础边框
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
-
-                // 选中时的渐变边框效果
-            }
-        )
-        .onTapGesture { location in
-            // 根据点击位置计算起始位置（0到1）
-            let width = 400.0 // 假设宽度
-            startTrim = max(0, min(1, location.x / width))
-            animationID = UUID()
-            animationProgress = 0
+        .modifier(ClipboardRowSelectionModifier(isSelected: isSelected))
+        .onTapGesture {
             onSelect()
-            clipboardManager.copyToClipboard(item: item)
+            onCopy()
             onHover(nil)
-            PreviewWindowManager.shared.hidePreview()
-
-            // 启动动画
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                withAnimation(.linear(duration: 0.8)) {
-                    animationProgress = 1
-                }
-            }
         }
         .onHover { isHovered in
             if isHovered {
@@ -913,16 +914,8 @@ struct FavoriteItemView: View {
     }
 }
 
-// 自定义形状，直接使用 RoundedRectangle
-struct TrimmedRoundedRect: Shape {
-    let cornerRadius: CGFloat
-
-    func path(in rect: CGRect) -> Path {
-        let insetRect = rect.insetBy(dx: 1.25, dy: 1.25)
-        return RoundedRectangle(cornerRadius: cornerRadius).path(in: insetRect)
+struct ContentView_Previews: PreviewProvider {
+    static var previews: some View {
+        ContentView()
     }
-}
-
-#Preview {
-    ContentView()
 }

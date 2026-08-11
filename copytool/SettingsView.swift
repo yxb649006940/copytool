@@ -11,6 +11,7 @@ struct SettingsView: View {
     @State private var hotkeyMonitor: Any?               // 快捷键监听器
     @State private var launchAtLogin: Bool               // 是否开机启动
     @State private var windowAlwaysOnTop: Bool            // 窗口是否置顶
+    @State private var monitoringEnabled: Bool            // 是否记录剪贴板
 
     /// 初始化方法
     /// - Parameter onClose: 关闭回调
@@ -21,6 +22,7 @@ struct SettingsView: View {
         self._selectedHotkey = State(initialValue: settings.hotkey)
         self._launchAtLogin = State(initialValue: settings.launchAtLogin)
         self._windowAlwaysOnTop = State(initialValue: settings.windowAlwaysOnTop)
+        self._monitoringEnabled = State(initialValue: settings.monitoringEnabled)
     }
 
     var body: some View {
@@ -32,6 +34,7 @@ struct SettingsView: View {
             ScrollView {
                 VStack(spacing: 28) {
                     storageDurationSection
+                    privacySection
                     launchAtLoginSection
                     windowBehaviorSection
                     hotkeySection
@@ -54,6 +57,39 @@ struct SettingsView: View {
         .onDisappear {
             removeHotkeyMonitor()
         }
+    }
+
+    private var privacySection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            SectionHeader(title: "隐私", icon: "hand.raised.fill")
+
+            Toggle(isOn: $monitoringEnabled) {
+                HStack(spacing: 14) {
+                    Image(systemName: monitoringEnabled ? "record.circle" : "pause.circle")
+                        .font(.system(size: 16))
+                        .foregroundColor(monitoringEnabled ? .blue : .orange)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("记录剪贴板")
+                            .font(.system(size: 14, weight: .medium))
+                        Text("关闭后保留已有历史，但不再记录新内容")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                }
+            }
+            .toggleStyle(SwitchToggleStyle())
+            .padding(16)
+            .background(Color(NSColor.controlBackgroundColor))
+            .cornerRadius(10)
+        }
+        .padding(16)
+        .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
+        .cornerRadius(16)
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
+        )
     }
 
     private var headerView: some View {
@@ -181,9 +217,6 @@ struct SettingsView: View {
                     RoundedRectangle(cornerRadius: 10)
                         .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
                 )
-                .onChange(of: launchAtLogin) {
-                    SettingsManager.shared.launchAtLogin = launchAtLogin
-                }
             }
         }
         .padding(.all, 16)
@@ -225,9 +258,6 @@ struct SettingsView: View {
                     RoundedRectangle(cornerRadius: 10)
                         .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
                 )
-                .onChange(of: windowAlwaysOnTop) {
-                    SettingsManager.shared.windowAlwaysOnTop = windowAlwaysOnTop
-                }
             }
         }
         .padding(.all, 16)
@@ -410,7 +440,9 @@ struct SettingsView: View {
             Button(action: {
                 selectedStorageDuration = .oneMonth
                 selectedHotkey = HotkeyConfiguration(keyCode: 9, modifiers: [.command, .option])
+                launchAtLogin = false
                 windowAlwaysOnTop = false
+                monitoringEnabled = true
             }) {
                 HStack(spacing: 8) {
                     Image(systemName: "arrow.counterclockwise")
@@ -443,6 +475,10 @@ struct SettingsView: View {
                 let settings = SettingsManager.shared
                 settings.storageDuration = selectedStorageDuration
                 settings.hotkey = selectedHotkey
+                settings.launchAtLogin = launchAtLogin
+                settings.windowAlwaysOnTop = windowAlwaysOnTop
+                settings.monitoringEnabled = monitoringEnabled
+                NotificationCenter.default.post(name: NSNotification.Name("MonitoringChanged"), object: nil)
 
                 // 保存设置后立即清理过期记录
                 ClipboardManager.shared.cleanExpiredItems()
@@ -484,8 +520,13 @@ struct SettingsView: View {
             if event.type == .keyDown {
                 let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
 
-                // 确保至少有一个修饰键，且不是单独的修饰键
-                if !modifiers.isEmpty && event.keyCode != 0 && event.keyCode != 55 && event.keyCode != 56 && event.keyCode != 58 && event.keyCode != 59 {
+                if event.keyCode == 53 {
+                    isRecordingHotkey = false
+                    return nil
+                }
+
+                // keyDown 事件本身不会是单独的修饰键，因此只需要求至少一个修饰键。
+                if !modifiers.isEmpty && !event.isARepeat {
                     let newHotkey = HotkeyConfiguration(keyCode: event.keyCode, modifiers: modifiers)
                     selectedHotkey = newHotkey
                     isRecordingHotkey = false

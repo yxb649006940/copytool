@@ -1,9 +1,10 @@
-import SwiftUI
 import Foundation
+import Cocoa
+import CryptoKit
 
 /// 剪贴板内容类型枚举
 /// 定义了支持的三种剪贴板内容类型：文本、图片和文件
-enum ContentType: String, Codable {
+enum ContentType: String, Codable, Sendable {
     case text    // 文本类型
     case image   // 图片类型
     case file    // 文件类型
@@ -11,13 +12,16 @@ enum ContentType: String, Codable {
 
 /// 剪贴板历史项模型
 /// 表示剪贴板历史中的单个条目，支持文本、图片和文件三种类型
-struct HistoryItem: Identifiable, Codable, Equatable {
+struct HistoryItem: Identifiable, Codable, Equatable, Sendable {
     let id: UUID                // 唯一标识符
     let contentType: ContentType  // 内容类型
     let textContent: String?    // 文本内容
-    let imageData: Data?        // 图片数据
+    let imageData: Data?        // 新图片在落盘前的临时数据
+    let imageFileURL: String?   // 已落盘图片的本地文件 URL
+    let imageDigest: String?    // 图片内容哈希，用于跨启动去重
     let fileName: String?       // 文件名（文件类型时）
     let fileURL: String?        // 文件URL（文件类型时）
+    let fileURLs: [String]?     // 文件URL列表（支持一次复制多个文件）
     let timestamp: Date         // 时间戳
     var isFavorite: Bool        // 是否为收藏项
 
@@ -27,8 +31,11 @@ struct HistoryItem: Identifiable, Codable, Equatable {
         case contentType
         case textContent
         case imageData
+        case imageFileURL
+        case imageDigest
         case fileName
         case fileURL
+        case fileURLs
         case timestamp
         case isFavorite
     }
@@ -39,9 +46,14 @@ struct HistoryItem: Identifiable, Codable, Equatable {
         id = try container.decode(UUID.self, forKey: .id)
         contentType = try container.decode(ContentType.self, forKey: .contentType)
         textContent = try container.decodeIfPresent(String.self, forKey: .textContent)
-        imageData = try container.decodeIfPresent(Data.self, forKey: .imageData)
+        let decodedImageData = try container.decodeIfPresent(Data.self, forKey: .imageData)
+        imageData = decodedImageData
+        imageFileURL = try container.decodeIfPresent(String.self, forKey: .imageFileURL)
+        imageDigest = try container.decodeIfPresent(String.self, forKey: .imageDigest)
+            ?? decodedImageData.map { Self.imageDigest(for: $0) }
         fileName = try container.decodeIfPresent(String.self, forKey: .fileName)
         fileURL = try container.decodeIfPresent(String.self, forKey: .fileURL)
+        fileURLs = try container.decodeIfPresent([String].self, forKey: .fileURLs)
         timestamp = try container.decode(Date.self, forKey: .timestamp)
         isFavorite = try container.decodeIfPresent(Bool.self, forKey: .isFavorite) ?? false
     }
@@ -58,8 +70,11 @@ struct HistoryItem: Identifiable, Codable, Equatable {
         self.contentType = contentType
         self.textContent = textContent
         self.imageData = imageData
+        self.imageFileURL = nil
+        self.imageDigest = imageData.map { Self.imageDigest(for: $0) }
         self.fileName = nil
         self.fileURL = nil
+        self.fileURLs = nil
         self.timestamp = timestamp
         self.isFavorite = false
     }
@@ -78,8 +93,11 @@ struct HistoryItem: Identifiable, Codable, Equatable {
         self.contentType = contentType
         self.textContent = textContent
         self.imageData = imageData
+        self.imageFileURL = nil
+        self.imageDigest = imageData.map { Self.imageDigest(for: $0) }
         self.fileName = fileName
         self.fileURL = fileURL
+        self.fileURLs = fileURL.map { [$0] }
         self.timestamp = timestamp
         self.isFavorite = false
     }
@@ -91,8 +109,11 @@ struct HistoryItem: Identifiable, Codable, Equatable {
         self.contentType = .text
         self.textContent = text
         self.imageData = nil
+        self.imageFileURL = nil
+        self.imageDigest = nil
         self.fileName = nil
         self.fileURL = nil
+        self.fileURLs = nil
         self.timestamp = Date()
         self.isFavorite = false
     }
@@ -104,15 +125,20 @@ struct HistoryItem: Identifiable, Codable, Equatable {
         self.contentType = .image
         self.textContent = nil
         // 使用 JPEG 压缩图片，质量设置为 0.6 以平衡质量和内存占用
+        let encodedData: Data?
         if let tiffData = image.tiffRepresentation,
            let bitmap = NSBitmapImageRep(data: tiffData),
            let jpegData = bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.6]) {
-            self.imageData = jpegData
+            encodedData = jpegData
         } else {
-            self.imageData = image.tiffRepresentation
+            encodedData = image.tiffRepresentation
         }
+        self.imageData = encodedData
+        self.imageFileURL = nil
+        self.imageDigest = encodedData.map { Self.imageDigest(for: $0) }
         self.fileName = nil
         self.fileURL = nil
+        self.fileURLs = nil
         self.timestamp = Date()
         self.isFavorite = false
     }
@@ -124,17 +150,107 @@ struct HistoryItem: Identifiable, Codable, Equatable {
         self.contentType = .file
         self.textContent = nil
         self.imageData = nil
+        self.imageFileURL = nil
+        self.imageDigest = nil
         self.fileName = fileURL.lastPathComponent
         self.fileURL = fileURL.absoluteString
+        self.fileURLs = [fileURL.absoluteString]
         self.timestamp = Date()
         self.isFavorite = false
+    }
+
+    /// 便捷初始化方法 - 用于多文件内容
+    init?(fileURLs: [URL]) {
+        guard let firstFileURL = fileURLs.first else { return nil }
+        self.id = UUID()
+        self.contentType = .file
+        self.textContent = nil
+        self.imageData = nil
+        self.imageFileURL = nil
+        self.imageDigest = nil
+        self.fileName = fileURLs.count == 1 ? firstFileURL.lastPathComponent : "\(fileURLs.count) 个文件"
+        self.fileURL = firstFileURL.absoluteString
+        self.fileURLs = fileURLs.map(\.absoluteString)
+        self.timestamp = Date()
+        self.isFavorite = false
+    }
+
+    /// 持久化层恢复历史项时使用的完整初始化方法
+    nonisolated init(
+        id: UUID,
+        contentType: ContentType,
+        textContent: String?,
+        imageData: Data?,
+        imageFileURL: String?,
+        imageDigest: String?,
+        fileName: String?,
+        fileURL: String?,
+        fileURLs: [String]?,
+        timestamp: Date,
+        isFavorite: Bool
+    ) {
+        self.id = id
+        self.contentType = contentType
+        self.textContent = textContent
+        self.imageData = imageData
+        self.imageFileURL = imageFileURL
+        self.imageDigest = imageDigest ?? imageData.map { Self.imageDigest(for: $0) }
+        self.fileName = fileName
+        self.fileURL = fileURL
+        self.fileURLs = fileURLs ?? fileURL.map { [$0] }
+        self.timestamp = timestamp
+        self.isFavorite = isFavorite
     }
 
     /// 获取图片对象
     /// - Returns: 可选的图片对象
     var image: NSImage? {
-        guard let data = imageData else { return nil }
-        return NSImage(data: data)
+        if let data = imageData {
+            return NSImage(data: data)
+        }
+        guard let imageFileURL,
+              let fileURL = URL(string: imageFileURL) else { return nil }
+        guard let storedData = try? Data(contentsOf: fileURL) else { return nil }
+        let imageData = (try? HistoryCrypto.shared.decrypt(storedData)) ?? storedData
+        return NSImage(data: imageData)
+    }
+
+    /// 读取预览所需的原始图片数据。调用方可在后台任务中执行，避免阻塞列表滚动。
+    nonisolated func previewImageData() -> Data? {
+        if contentType == .image {
+            if let imageData {
+                return imageData
+            }
+            guard let imageFileURL,
+                  let storedURL = URL(string: imageFileURL),
+                  let storedData = try? Data(contentsOf: storedURL) else {
+                return nil
+            }
+            return (try? HistoryCrypto.shared.decrypt(storedData)) ?? storedData
+        }
+
+        guard contentType == .file,
+              let fileURL = resolvedFileURLs.first else {
+            return nil
+        }
+        return try? Data(contentsOf: fileURL)
+    }
+
+    nonisolated static func imageDigest(for data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// 返回当前历史项中所有有效的文件 URL。
+    nonisolated var resolvedFileURLs: [URL] {
+        let values = fileURLs ?? fileURL.map { [$0] } ?? []
+        return values.compactMap(URL.init(string:))
+    }
+
+    /// 搜索使用完整内容，不受列表摘要的 50 字符限制。
+    nonisolated var searchableText: String {
+        [textContent, fileName, resolvedFileURLs.map(\.path).joined(separator: " ")]
+            .compactMap { $0 }
+            .joined(separator: " ")
     }
 
     /// 获取用于显示的文本
@@ -148,11 +264,4 @@ struct HistoryItem: Identifiable, Codable, Equatable {
         return "图片内容"
     }
 
-    /// 获取相对时间字符串
-    /// - Returns: 相对于当前时间的格式化字符串（如"2分钟前"）
-    var timeString: String {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .abbreviated
-        return formatter.localizedString(for: timestamp, relativeTo: Date())
-    }
 }

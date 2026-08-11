@@ -25,7 +25,7 @@ enum StorageDuration: String, Codable, CaseIterable {
 }
 
 /// 快捷键配置结构体
-struct HotkeyConfiguration: Codable {
+struct HotkeyConfiguration: Codable, Sendable {
     let keyCode: UInt16
     let modifiers: UInt // 存储修饰符的原始值
 
@@ -34,14 +34,14 @@ struct HotkeyConfiguration: Codable {
         let modifiers = NSEvent.ModifierFlags(rawValue: modifiers)
         var parts: [String] = []
 
-        if modifiers.contains(.control) {
-            parts.append("Ctrl")
+        if modifiers.contains(.command) {
+            parts.append("Cmd")
         }
         if modifiers.contains(.option) {
             parts.append("Opt")
         }
-        if modifiers.contains(.command) {
-            parts.append("Cmd")
+        if modifiers.contains(.control) {
+            parts.append("Ctrl")
         }
         if modifiers.contains(.shift) {
             parts.append("Shift")
@@ -74,9 +74,20 @@ struct HotkeyConfiguration: Codable {
     private func keyCodeToCharacter(_ keyCode: UInt16) -> String {
         let keyMap: [UInt16: String] = [
             0: "a", 1: "s", 2: "d", 3: "f", 4: "h", 5: "g", 6: "z", 7: "x", 8: "c", 9: "v",
-            11: "b", 12: "q", 13: "w", 14: "e", 15: "r", 16: "y", 17: "t", 31: "1", 32: "2",
-            33: "3", 34: "4", 35: "6", 36: "5", 37: "=", 38: "9", 39: "7", 40: "-", 41: "8",
-            42: "0", 43: "]", 44: "o", 45: "u", 46: "[", 47: "i", 48: "p"
+            11: "b", 12: "q", 13: "w", 14: "e", 15: "r", 16: "y", 17: "t", 18: "1", 19: "2",
+            20: "3", 21: "4", 22: "6", 23: "5", 24: "=", 25: "9", 26: "7", 27: "-", 28: "8",
+            29: "0", 30: "]", 31: "o", 32: "u", 33: "[", 34: "i", 35: "p", 36: "Return",
+            37: "l", 38: "j", 39: "'", 40: "k", 41: ";", 42: "\\", 43: ",", 44: "/",
+            45: "n", 46: "m", 47: ".", 48: "Tab", 49: "Space", 50: "`", 51: "Delete",
+            53: "Esc", 65: "Keypad .", 67: "Keypad *", 69: "Keypad +", 71: "Clear",
+            75: "Keypad /", 76: "Keypad Enter", 78: "Keypad -", 81: "Keypad =", 82: "Keypad 0",
+            83: "Keypad 1", 84: "Keypad 2", 85: "Keypad 3", 86: "Keypad 4", 87: "Keypad 5",
+            88: "Keypad 6", 89: "Keypad 7", 91: "Keypad 8", 92: "Keypad 9", 96: "F5",
+            97: "F6", 98: "F7", 99: "F3", 100: "F8", 101: "F9", 103: "F11", 105: "F13",
+            106: "F16", 107: "F14", 109: "F10", 111: "F12", 113: "F15", 114: "Help",
+            115: "Home", 116: "Page Up", 117: "Forward Delete", 118: "F4", 119: "End",
+            120: "F2", 121: "Page Down", 122: "F1", 123: "Left", 124: "Right", 125: "Down",
+            126: "Up"
         ]
 
         return keyMap[keyCode]?.uppercased() ?? "Unknown"
@@ -91,6 +102,7 @@ class SettingsManager {
     private let hotkeyKey = "hotkeyConfiguration"
     private let launchAtLoginKey = "launchAtLogin"
     private let windowAlwaysOnTopKey = "windowAlwaysOnTop"
+    private let monitoringEnabledKey = "monitoringEnabled"
 
     private init() {
         // 初始化时同步开机启动设置
@@ -139,24 +151,31 @@ class SettingsManager {
         }
     }
 
+    /// 是否记录新的剪贴板内容。默认开启。
+    var monitoringEnabled: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: monitoringEnabledKey) == nil {
+                return true
+            }
+            return UserDefaults.standard.bool(forKey: monitoringEnabledKey)
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: monitoringEnabledKey)
+        }
+    }
+
     /// 开机启动设置
     var launchAtLogin: Bool {
         get {
-            if #available(macOS 13.0, *) {
-                let service = SMAppService.mainApp
-                let isEnabled = service.status == .enabled
-                let userDefaultValue = UserDefaults.standard.bool(forKey: launchAtLoginKey)
+            let service = SMAppService.mainApp
+            let isEnabled = service.status == .enabled
+            let userDefaultValue = UserDefaults.standard.bool(forKey: launchAtLoginKey)
 
-                // 如果系统状态与 UserDefaults 不一致，同步到系统状态
-                if isEnabled != userDefaultValue {
-                    print("Login item status mismatch - system: \(isEnabled), userDefault: \(userDefaultValue), syncing to system state")
-                    UserDefaults.standard.set(isEnabled, forKey: launchAtLoginKey)
-                }
-
-                return isEnabled
-            } else {
-                return UserDefaults.standard.bool(forKey: launchAtLoginKey)
+            if isEnabled != userDefaultValue {
+                UserDefaults.standard.set(isEnabled, forKey: launchAtLoginKey)
             }
+
+            return isEnabled
         }
         set {
             UserDefaults.standard.set(newValue, forKey: launchAtLoginKey)
@@ -164,91 +183,34 @@ class SettingsManager {
         }
     }
 
-    /// 检查应用是否在 Applications 文件夹中（macOS 13+ 的 SMAppService 要求）
-    private func isAppInApplicationsFolder() -> Bool {
-        let appPath = Bundle.main.bundlePath
-        let applicationsPaths = [
-            "/Applications",
-            NSString(string: "~/Applications").expandingTildeInPath
-        ]
-        for applicationsPath in applicationsPaths {
-            if appPath.hasPrefix(applicationsPath) {
-                return true
-            }
-        }
-        return false
-    }
-
     /// 同步开机启动设置（确保 UserDefaults 与系统状态一致）
     private func syncLoginItemSetting() {
-        let mainBundle = Bundle.main
-        guard let bundleIdentifier = mainBundle.bundleIdentifier else {
-            print("Failed to get bundle identifier for login item sync")
-            return
-        }
+        let service = SMAppService.mainApp
+        let isEnabled = service.status == .enabled
+        let userDefaultValue = UserDefaults.standard.bool(forKey: launchAtLoginKey)
 
-        if #available(macOS 13.0, *) {
-            let service = SMAppService.mainApp
-            let isEnabled = service.status == .enabled
-            let userDefaultValue = UserDefaults.standard.bool(forKey: launchAtLoginKey)
-
-            print("Login item status - system: \(isEnabled), userDefault: \(userDefaultValue), inApplicationsFolder: \(isAppInApplicationsFolder())")
-
-            // 如果系统状态与 UserDefaults 不一致，强制同步
-            if isEnabled != userDefaultValue {
-                print("Syncing login item setting...")
-                applyLoginItemSetting(userDefaultValue)
-            }
-        } else {
-            // 旧版本 API 的同步逻辑
-            let currentState = SMLoginItemSetEnabled(bundleIdentifier as CFString, false)
-            let shouldBeEnabled = UserDefaults.standard.bool(forKey: launchAtLoginKey)
-
-            print("Login item status (old API) - current: \(currentState), shouldBe: \(shouldBeEnabled)")
-
-            SMLoginItemSetEnabled(bundleIdentifier as CFString, shouldBeEnabled)
+        // 启动时以系统真实状态为准，不在用户未操作时注册或注销。
+        if isEnabled != userDefaultValue {
+            UserDefaults.standard.set(isEnabled, forKey: launchAtLoginKey)
         }
     }
 
     /// 应用开机启动设置
     private func applyLoginItemSetting(_ enabled: Bool) {
-        let mainBundle = Bundle.main
-        guard let bundleIdentifier = mainBundle.bundleIdentifier else {
-            print("Failed to get bundle identifier")
-            return
-        }
-
-        if #available(macOS 13.0, *) {
-            // 使用现代的 SMAppService API
-            let service = SMAppService.mainApp
-            do {
-                if enabled {
-                    if service.status != .enabled {
-                        try service.register()
-                        print("Successfully registered login item")
-                    } else {
-                        print("Login item already registered")
-                    }
+        let service = SMAppService.mainApp
+        do {
+            if enabled {
+                if service.status != .enabled {
+                    try service.register()
                 } else {
-                    if service.status == .enabled {
-                        try service.unregister()
-                        print("Successfully unregistered login item")
-                    } else {
-                        print("Login item already unregistered")
-                    }
+                    return
                 }
-            } catch {
-                print("Failed to set login item with SMAppService: \(error)")
-                // 如果现代 API 失败，尝试使用旧 API（如果可用）
-                if #unavailable(macOS 13.0) {
-                    let success = SMLoginItemSetEnabled(bundleIdentifier as CFString, enabled)
-                    print("Fallback to SMLoginItemSetEnabled: \(success ? "Success" : "Failed")")
-                }
+            } else if service.status == .enabled {
+                try service.unregister()
             }
-        } else {
-            // 使用旧的 API 保持向后兼容
-            let success = SMLoginItemSetEnabled(bundleIdentifier as CFString, enabled)
-            print("SMLoginItemSetEnabled: \(success ? "Success" : "Failed") - \(enabled ? "Enabled" : "Disabled")")
+        } catch {
+            print("Failed to set login item with SMAppService: \(error)")
+            UserDefaults.standard.set(service.status == .enabled, forKey: launchAtLoginKey)
         }
     }
 
