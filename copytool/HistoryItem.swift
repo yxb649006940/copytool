@@ -10,6 +10,13 @@ enum ContentType: String, Codable, Sendable {
     case file    // 文件类型
 }
 
+/// 用户创建的收藏分类；未设置分类 ID 的收藏归入“默认”。
+struct FavoriteCategory: Identifiable, Codable, Equatable, Sendable {
+    let id: UUID
+    var name: String
+    let createdAt: Date
+}
+
 /// 剪贴板历史项模型
 /// 表示剪贴板历史中的单个条目，支持文本、图片和文件三种类型
 struct HistoryItem: Identifiable, Codable, Equatable, Sendable {
@@ -24,6 +31,7 @@ struct HistoryItem: Identifiable, Codable, Equatable, Sendable {
     let fileURLs: [String]?     // 文件URL列表（支持一次复制多个文件）
     let timestamp: Date         // 时间戳
     var isFavorite: Bool        // 是否为收藏项
+    var favoriteCategoryID: UUID? // nil 表示默认分类
 
     /// 自定义编码/解码键
     enum CodingKeys: String, CodingKey {
@@ -38,6 +46,7 @@ struct HistoryItem: Identifiable, Codable, Equatable, Sendable {
         case fileURLs
         case timestamp
         case isFavorite
+        case favoriteCategoryID
     }
 
     /// 自定义解码器，为缺少的字段提供默认值
@@ -56,6 +65,7 @@ struct HistoryItem: Identifiable, Codable, Equatable, Sendable {
         fileURLs = try container.decodeIfPresent([String].self, forKey: .fileURLs)
         timestamp = try container.decode(Date.self, forKey: .timestamp)
         isFavorite = try container.decodeIfPresent(Bool.self, forKey: .isFavorite) ?? false
+        favoriteCategoryID = try container.decodeIfPresent(UUID.self, forKey: .favoriteCategoryID)
     }
 
     /// 完整初始化方法
@@ -77,6 +87,7 @@ struct HistoryItem: Identifiable, Codable, Equatable, Sendable {
         self.fileURLs = nil
         self.timestamp = timestamp
         self.isFavorite = false
+        self.favoriteCategoryID = nil
     }
 
     /// 完整初始化方法（带文件名）
@@ -100,6 +111,7 @@ struct HistoryItem: Identifiable, Codable, Equatable, Sendable {
         self.fileURLs = fileURL.map { [$0] }
         self.timestamp = timestamp
         self.isFavorite = false
+        self.favoriteCategoryID = nil
     }
 
     /// 便捷初始化方法 - 用于文本内容
@@ -116,6 +128,7 @@ struct HistoryItem: Identifiable, Codable, Equatable, Sendable {
         self.fileURLs = nil
         self.timestamp = Date()
         self.isFavorite = false
+        self.favoriteCategoryID = nil
     }
 
     /// 便捷初始化方法 - 用于图片内容
@@ -141,6 +154,7 @@ struct HistoryItem: Identifiable, Codable, Equatable, Sendable {
         self.fileURLs = nil
         self.timestamp = Date()
         self.isFavorite = false
+        self.favoriteCategoryID = nil
     }
 
     /// 便捷初始化方法 - 用于文件内容
@@ -157,6 +171,7 @@ struct HistoryItem: Identifiable, Codable, Equatable, Sendable {
         self.fileURLs = [fileURL.absoluteString]
         self.timestamp = Date()
         self.isFavorite = false
+        self.favoriteCategoryID = nil
     }
 
     /// 便捷初始化方法 - 用于多文件内容
@@ -173,6 +188,7 @@ struct HistoryItem: Identifiable, Codable, Equatable, Sendable {
         self.fileURLs = fileURLs.map(\.absoluteString)
         self.timestamp = Date()
         self.isFavorite = false
+        self.favoriteCategoryID = nil
     }
 
     /// 持久化层恢复历史项时使用的完整初始化方法
@@ -187,7 +203,8 @@ struct HistoryItem: Identifiable, Codable, Equatable, Sendable {
         fileURL: String?,
         fileURLs: [String]?,
         timestamp: Date,
-        isFavorite: Bool
+        isFavorite: Bool,
+        favoriteCategoryID: UUID? = nil
     ) {
         self.id = id
         self.contentType = contentType
@@ -200,6 +217,7 @@ struct HistoryItem: Identifiable, Codable, Equatable, Sendable {
         self.fileURLs = fileURLs ?? fileURL.map { [$0] }
         self.timestamp = timestamp
         self.isFavorite = isFavorite
+        self.favoriteCategoryID = isFavorite ? favoriteCategoryID : nil
     }
 
     /// 获取图片对象

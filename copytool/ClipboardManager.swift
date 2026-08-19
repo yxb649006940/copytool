@@ -7,6 +7,8 @@ import Combine
 final class ClipboardManager: ObservableObject {
     @Published private(set) var history: [HistoryItem] = []
     @Published private(set) var favorites: [HistoryItem] = []
+    @Published private(set) var favoriteCategories: [FavoriteCategory] = []
+    @Published private(set) var favoriteFilter: HistoryStore.FavoriteFilter = .all
     @Published private(set) var historyTotalCount = 0
     @Published private(set) var favoriteTotalCount = 0
     @Published private(set) var isLoadingHistory = true
@@ -83,6 +85,7 @@ final class ClipboardManager: ObservableObject {
             favorites = Array(mergedFavorites.prefix(max(pageSize, liveFavorites.count)))
             historyTotalCount = max(result.history.totalCount, mergedHistory.count)
             favoriteTotalCount = max(result.favorites.totalCount, mergedFavorites.count)
+            favoriteCategories = result.categories
             historyResultCount = historyTotalCount
             favoriteResultCount = favoriteTotalCount
             latestHistoryItem = mergedHistory.first
@@ -214,14 +217,17 @@ final class ClipboardManager: ObservableObject {
         if let index = history.firstIndex(where: { $0.id == item.id }) {
             // 用户可能在图片落盘完成前已切换收藏状态。
             mergedItem.isFavorite = history[index].isFavorite
+            mergedItem.favoriteCategoryID = history[index].favoriteCategoryID
             history[index] = mergedItem
         }
         if let index = favorites.firstIndex(where: { $0.id == item.id }) {
             mergedItem.isFavorite = favorites[index].isFavorite
+            mergedItem.favoriteCategoryID = favorites[index].favoriteCategoryID
             favorites[index] = mergedItem
         }
         if latestHistoryItem?.id == item.id {
             mergedItem.isFavorite = latestHistoryItem?.isFavorite ?? mergedItem.isFavorite
+            mergedItem.favoriteCategoryID = latestHistoryItem?.favoriteCategoryID
             latestHistoryItem = mergedItem
         }
     }
@@ -252,19 +258,22 @@ final class ClipboardManager: ObservableObject {
         }
     }
 
-    func searchFavorites(_ searchText: String) {
+    func searchFavorites(_ searchText: String, debounce: Bool = true) {
         favoriteSearchText = searchText
         favoriteLoadGeneration += 1
         let generation = favoriteLoadGeneration
         favoriteSearchTask?.cancel()
         isLoadingFavorites = true
         let pendingPersistence = persistenceTask
+        let filter = favoriteFilter
         favoriteSearchTask = Task { [weak self, historyStore, pageSize] in
-            try? await Task.sleep(for: .milliseconds(250))
+            if debounce {
+                try? await Task.sleep(for: .milliseconds(250))
+            }
             guard !Task.isCancelled, let self else { return }
             await pendingPersistence?.value
-            let page = await historyStore.loadPage(
-                .favorites,
+            let page = await historyStore.loadFavoritePage(
+                filter: filter,
                 offset: 0,
                 limit: pageSize,
                 searchText: searchText
@@ -304,11 +313,12 @@ final class ClipboardManager: ObservableObject {
         let generation = favoriteLoadGeneration
         let offset = favorites.count
         let searchText = favoriteSearchText
+        let filter = favoriteFilter
         let pendingPersistence = persistenceTask
         Task { [weak self, historyStore, pageSize] in
             await pendingPersistence?.value
-            let page = await historyStore.loadPage(
-                .favorites,
+            let page = await historyStore.loadFavoritePage(
+                filter: filter,
                 offset: offset,
                 limit: pageSize,
                 searchText: searchText
@@ -326,6 +336,98 @@ final class ClipboardManager: ObservableObject {
             || item.searchableText.localizedCaseInsensitiveContains(normalizedQuery)
     }
 
+    private func matchesFavoriteFilter(_ item: HistoryItem) -> Bool {
+        switch favoriteFilter {
+        case .all:
+            return true
+        case .uncategorized:
+            return item.favoriteCategoryID == nil
+        case .category(let id):
+            return item.favoriteCategoryID == id
+        }
+    }
+
+    func selectFavoriteFilter(_ filter: HistoryStore.FavoriteFilter) {
+        guard favoriteFilter != filter else { return }
+        favoriteFilter = filter
+        // 先移除旧分类列表，避免新数据插到顶部时 List 保留旧行的滚动锚点。
+        favorites = []
+        favoriteResultCount = 0
+        searchFavorites(favoriteSearchText, debounce: false)
+    }
+
+    func createFavoriteCategory(name: String) async -> FavoriteCategory? {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let existing = favoriteCategories.first(where: {
+            $0.name.caseInsensitiveCompare(trimmedName) == .orderedSame
+        }) {
+            return existing
+        }
+        guard let category = await historyStore.createCategory(name: trimmedName) else { return nil }
+        favoriteCategories.append(category)
+        return category
+    }
+
+    func renameFavoriteCategory(_ category: FavoriteCategory, name: String) async -> Bool {
+        guard await historyStore.renameCategory(id: category.id, name: name) else { return false }
+        if let index = favoriteCategories.firstIndex(where: { $0.id == category.id }) {
+            favoriteCategories[index].name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return true
+    }
+
+    func deleteFavoriteCategory(_ category: FavoriteCategory) async -> Bool {
+        guard await historyStore.deleteCategory(id: category.id) else { return false }
+        favoriteCategories.removeAll { $0.id == category.id }
+
+        for index in history.indices where history[index].favoriteCategoryID == category.id {
+            history[index].favoriteCategoryID = nil
+        }
+        for index in favorites.indices where favorites[index].favoriteCategoryID == category.id {
+            favorites[index].favoriteCategoryID = nil
+        }
+        if latestHistoryItem?.favoriteCategoryID == category.id {
+            latestHistoryItem?.favoriteCategoryID = nil
+        }
+
+        if favoriteFilter == .category(category.id) {
+            favoriteFilter = .uncategorized
+            searchFavorites(favoriteSearchText)
+        }
+        return true
+    }
+
+    func moveFavorite(_ item: HistoryItem, to categoryID: UUID?) {
+        guard item.isFavorite else { return }
+        var updatedItem = item
+        updatedItem.favoriteCategoryID = categoryID
+
+        if let index = history.firstIndex(where: { $0.id == item.id }) {
+            history[index].favoriteCategoryID = categoryID
+        }
+        if let index = favorites.firstIndex(where: { $0.id == item.id }) {
+            if matchesFavoriteFilter(updatedItem) {
+                favorites[index] = updatedItem
+            } else {
+                favorites.remove(at: index)
+                favoriteResultCount = max(0, favoriteResultCount - 1)
+            }
+        }
+        if latestHistoryItem?.id == item.id {
+            latestHistoryItem?.favoriteCategoryID = categoryID
+        }
+        if unsavedItems[item.id] != nil {
+            unsavedItems[item.id] = updatedItem
+        }
+
+        let previousTask = persistenceTask
+        let task = Task { [historyStore] in
+            await previousTask?.value
+            await historyStore.moveFavorite(id: item.id, categoryID: categoryID)
+        }
+        persistenceTask = task
+    }
+
     // MARK: - Mutations
 
     func cleanExpiredItems() {
@@ -333,6 +435,7 @@ final class ClipboardManager: ObservableObject {
         let previousTask = persistenceTask
         let historyQuery = historySearchText
         let favoriteQuery = favoriteSearchText
+        let filter = favoriteFilter
         let task = Task { [weak self, historyStore, pageSize] in
             await previousTask?.value
             await historyStore.deleteExpired(before: expirationCutoff)
@@ -343,8 +446,8 @@ final class ClipboardManager: ObservableObject {
                 limit: pageSize,
                 searchText: historyQuery
             )
-            let favoritePage = await historyStore.loadPage(
-                .favorites,
+            let favoritePage = await historyStore.loadFavoritePage(
+                filter: filter,
                 offset: 0,
                 limit: pageSize,
                 searchText: favoriteQuery
@@ -363,19 +466,58 @@ final class ClipboardManager: ObservableObject {
         persistenceTask = task
     }
 
-    func toggleFavorite(item: HistoryItem) {
+    func setFavorite(item: HistoryItem, categoryID: UUID?) {
         let currentItem = history.first(where: { $0.id == item.id })
             ?? favorites.first(where: { $0.id == item.id })
             ?? item
         var updatedItem = currentItem
-        updatedItem.isFavorite.toggle()
+        updatedItem.isFavorite = true
+        updatedItem.favoriteCategoryID = categoryID
 
-        if let index = history.firstIndex(where: { $0.id == item.id }) {
+        applyFavoriteUpdate(updatedItem, wasFavorite: currentItem.isFavorite)
+
+        let previousTask = persistenceTask
+        let task = Task { [historyStore] in
+            await previousTask?.value
+            await historyStore.setFavorite(
+                id: updatedItem.id,
+                isFavorite: true,
+                categoryID: categoryID
+            )
+        }
+        persistenceTask = task
+    }
+
+    func toggleFavorite(item: HistoryItem) {
+        let currentItem = history.first(where: { $0.id == item.id })
+            ?? favorites.first(where: { $0.id == item.id })
+            ?? item
+        if !currentItem.isFavorite {
+            setFavorite(item: currentItem, categoryID: nil)
+            return
+        }
+
+        var updatedItem = currentItem
+        updatedItem.isFavorite = false
+        updatedItem.favoriteCategoryID = nil
+        applyFavoriteUpdate(updatedItem, wasFavorite: true)
+
+        let previousTask = persistenceTask
+        let task = Task { [historyStore] in
+            await previousTask?.value
+            await historyStore.setFavorite(id: updatedItem.id, isFavorite: false)
+        }
+        persistenceTask = task
+    }
+
+    private func applyFavoriteUpdate(_ updatedItem: HistoryItem, wasFavorite: Bool) {
+        if let index = history.firstIndex(where: { $0.id == updatedItem.id }) {
             history[index] = updatedItem
         }
         if updatedItem.isFavorite {
-            favoriteTotalCount += 1
+            if !wasFavorite { favoriteTotalCount += 1 }
             if matches(updatedItem, query: favoriteSearchText),
+               matchesFavoriteFilter(updatedItem),
                !favorites.contains(where: { $0.id == updatedItem.id }) {
                 favorites.insert(updatedItem, at: 0)
                 favorites.sort { $0.timestamp > $1.timestamp }
@@ -394,13 +536,6 @@ final class ClipboardManager: ObservableObject {
         if unsavedItems[updatedItem.id] != nil {
             unsavedItems[updatedItem.id] = updatedItem
         }
-
-        let previousTask = persistenceTask
-        let task = Task { [historyStore] in
-            await previousTask?.value
-            await historyStore.setFavorite(id: updatedItem.id, isFavorite: updatedItem.isFavorite)
-        }
-        persistenceTask = task
     }
 
     func copyToClipboard(item: HistoryItem) {

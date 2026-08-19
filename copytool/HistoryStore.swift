@@ -4,9 +4,15 @@ import SQLite3
 
 /// SQLite 增量存储：每条记录独立加密，图片保持分文件存放。
 actor HistoryStore {
-    enum Collection: Sendable {
+    enum Collection: Equatable, Sendable {
         case history
         case favorites
+    }
+
+    enum FavoriteFilter: Equatable, Sendable {
+        case all
+        case uncategorized
+        case category(UUID)
     }
 
     struct Page: Sendable {
@@ -18,6 +24,7 @@ actor HistoryStore {
     struct BootstrapResult: Sendable {
         let history: Page
         let favorites: Page
+        let categories: [FavoriteCategory]
         let migratedLegacyData: Bool
     }
 
@@ -103,12 +110,41 @@ actor HistoryStore {
             return BootstrapResult(
                 history: try loadPage(.history, offset: 0, limit: pageSize, searchText: "", database: database),
                 favorites: try loadPage(.favorites, offset: 0, limit: pageSize, searchText: "", database: database),
+                categories: try loadCategories(database: database),
                 migratedLegacyData: migrated
             )
         } catch {
             print("SQLite 历史记录初始化失败: \(error)")
             let emptyPage = Page(items: [], totalCount: 0, hasMore: false)
-            return BootstrapResult(history: emptyPage, favorites: emptyPage, migratedLegacyData: false)
+            return BootstrapResult(
+                history: emptyPage,
+                favorites: emptyPage,
+                categories: [],
+                migratedLegacyData: false
+            )
+        }
+    }
+
+    func loadFavoritePage(
+        filter: FavoriteFilter,
+        offset: Int,
+        limit: Int,
+        searchText: String
+    ) -> Page {
+        do {
+            let database = try openDatabase()
+            defer { sqlite3_close(database) }
+            return try loadPage(
+                .favorites,
+                offset: offset,
+                limit: limit,
+                searchText: searchText,
+                favoriteFilter: filter,
+                database: database
+            )
+        } catch {
+            print("SQLite 收藏分页加载失败: \(error)")
+            return Page(items: [], totalCount: 0, hasMore: false)
         }
     }
 
@@ -160,17 +196,126 @@ actor HistoryStore {
         }
     }
 
-    func setFavorite(id: UUID, isFavorite: Bool) {
+    func setFavorite(id: UUID, isFavorite: Bool, categoryID: UUID? = nil) {
         do {
             let database = try openDatabase()
             defer { sqlite3_close(database) }
             try execute(
-                "UPDATE history_items SET is_favorite = ? WHERE id = ?",
+                "UPDATE history_items SET is_favorite = ?, favorite_category_id = ? WHERE id = ?",
                 database: database,
-                bindings: [.integer(isFavorite ? 1 : 0), .text(id.uuidString)]
+                bindings: [
+                    .integer(isFavorite ? 1 : 0),
+                    isFavorite ? categoryID.map { .text($0.uuidString) } ?? .null : .null,
+                    .text(id.uuidString)
+                ]
             )
         } catch {
             print("SQLite 更新收藏状态失败: \(error)")
+        }
+    }
+
+    func loadCategories() -> [FavoriteCategory] {
+        do {
+            let database = try openDatabase()
+            defer { sqlite3_close(database) }
+            return try loadCategories(database: database)
+        } catch {
+            print("SQLite 读取收藏分类失败: \(error)")
+            return []
+        }
+    }
+
+    func createCategory(name: String) -> FavoriteCategory? {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty,
+              !["默认", "全部"].contains(where: { $0.caseInsensitiveCompare(trimmedName) == .orderedSame })
+        else { return nil }
+        do {
+            let database = try openDatabase()
+            defer { sqlite3_close(database) }
+            let category = FavoriteCategory(id: UUID(), name: trimmedName, createdAt: Date())
+            try execute(
+                "INSERT INTO favorite_categories(id, name, created_at) VALUES(?, ?, ?)",
+                database: database,
+                bindings: [
+                    .text(category.id.uuidString),
+                    .text(category.name),
+                    .double(category.createdAt.timeIntervalSince1970)
+                ]
+            )
+            return category
+        } catch {
+            print("SQLite 新建收藏分类失败: \(error)")
+            return nil
+        }
+    }
+
+    func renameCategory(id: UUID, name: String) -> Bool {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty,
+              !["默认", "全部"].contains(where: {
+                  $0.caseInsensitiveCompare(trimmedName) == .orderedSame
+              })
+        else { return false }
+        do {
+            let database = try openDatabase()
+            defer { sqlite3_close(database) }
+            try execute(
+                "UPDATE favorite_categories SET name = ? WHERE id = ?",
+                database: database,
+                bindings: [.text(trimmedName), .text(id.uuidString)]
+            )
+            return sqlite3_changes(database) > 0
+        } catch {
+            print("SQLite 重命名收藏分类失败: \(error)")
+            return false
+        }
+    }
+
+    /// 删除分类时保留收藏，并将其中内容移回默认分类。
+    func deleteCategory(id: UUID) -> Bool {
+        do {
+            let database = try openDatabase()
+            defer { sqlite3_close(database) }
+            try execute("BEGIN IMMEDIATE TRANSACTION", database: database)
+            do {
+                try execute(
+                    "UPDATE history_items SET favorite_category_id = NULL WHERE favorite_category_id = ?",
+                    database: database,
+                    bindings: [.text(id.uuidString)]
+                )
+                try execute(
+                    "DELETE FROM favorite_categories WHERE id = ?",
+                    database: database,
+                    bindings: [.text(id.uuidString)]
+                )
+                let deleted = sqlite3_changes(database) > 0
+                try execute("COMMIT", database: database)
+                return deleted
+            } catch {
+                try? execute("ROLLBACK", database: database)
+                throw error
+            }
+        } catch {
+            print("SQLite 删除收藏分类失败: \(error)")
+            return false
+        }
+    }
+
+    func moveFavorite(id: UUID, categoryID: UUID?) {
+        do {
+            let database = try openDatabase()
+            defer { sqlite3_close(database) }
+            try execute(
+                "UPDATE history_items SET favorite_category_id = ? WHERE id = ? AND is_favorite = 1",
+                database: database,
+                bindings: [
+                    categoryID.map { .text($0.uuidString) } ?? .null,
+                    .text(id.uuidString)
+                ]
+            )
+        } catch {
+            print("SQLite 移动收藏分类失败: \(error)")
         }
     }
 
@@ -247,7 +392,24 @@ actor HistoryStore {
                     id TEXT PRIMARY KEY NOT NULL,
                     payload BLOB NOT NULL,
                     timestamp REAL NOT NULL,
-                    is_favorite INTEGER NOT NULL DEFAULT 0
+                    is_favorite INTEGER NOT NULL DEFAULT 0,
+                    favorite_category_id TEXT
+                )
+                """,
+                database: database
+            )
+            if try !hasColumn("favorite_category_id", in: "history_items", database: database) {
+                try execute(
+                    "ALTER TABLE history_items ADD COLUMN favorite_category_id TEXT",
+                    database: database
+                )
+            }
+            try execute(
+                """
+                CREATE TABLE IF NOT EXISTS favorite_categories (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+                    created_at REAL NOT NULL
                 )
                 """,
                 database: database
@@ -258,6 +420,10 @@ actor HistoryStore {
             )
             try execute(
                 "CREATE INDEX IF NOT EXISTS idx_history_favorite_timestamp ON history_items(is_favorite, timestamp DESC)",
+                database: database
+            )
+            try execute(
+                "CREATE INDEX IF NOT EXISTS idx_history_favorite_category ON history_items(is_favorite, favorite_category_id, timestamp DESC)",
                 database: database
             )
             try execute(
@@ -276,17 +442,24 @@ actor HistoryStore {
         offset: Int,
         limit: Int,
         searchText: String,
+        favoriteFilter: FavoriteFilter = .all,
         database: OpaquePointer
     ) throws -> Page {
         let safeOffset = max(0, offset)
         let safeLimit = max(1, limit)
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
 
+        let whereClause = favoriteWhereClause(for: collection, filter: favoriteFilter)
+        let filterBindings = favoriteBindings(for: collection, filter: favoriteFilter)
+
         if query.isEmpty {
-            let whereClause = collection == .favorites ? " WHERE is_favorite = 1" : ""
-            let totalCount = try scalarInt("SELECT COUNT(*) FROM history_items\(whereClause)", database: database)
+            let totalCount = try scalarInt(
+                "SELECT COUNT(*) FROM history_items\(whereClause)",
+                database: database,
+                bindings: filterBindings
+            )
             let sql = """
-                SELECT id, payload, timestamp, is_favorite
+                SELECT id, payload, timestamp, is_favorite, favorite_category_id
                 FROM history_items\(whereClause)
                 ORDER BY timestamp DESC
                 LIMIT ? OFFSET ?
@@ -294,7 +467,7 @@ actor HistoryStore {
             let items = try queryItems(
                 sql,
                 database: database,
-                bindings: [.integer(Int64(safeLimit)), .integer(Int64(safeOffset))]
+                bindings: filterBindings + [.integer(Int64(safeLimit)), .integer(Int64(safeOffset))]
             )
             return Page(
                 items: items,
@@ -304,10 +477,9 @@ actor HistoryStore {
         }
 
         // 内容在库内保持加密，搜索在 HistoryStore actor 中解密过滤，不阻塞 UI。
-        let whereClause = collection == .favorites ? " WHERE is_favorite = 1" : ""
         var statement: OpaquePointer?
         let sql = """
-            SELECT id, payload, timestamp, is_favorite
+            SELECT id, payload, timestamp, is_favorite, favorite_category_id
             FROM history_items\(whereClause)
             ORDER BY timestamp DESC
             """
@@ -316,6 +488,7 @@ actor HistoryStore {
             throw StoreError.sqlite(String(cString: sqlite3_errmsg(database)))
         }
         defer { sqlite3_finalize(statement) }
+        try bind(filterBindings, to: statement, database: database)
 
         var matchCount = 0
         var pageItems: [HistoryItem] = []
@@ -333,6 +506,32 @@ actor HistoryStore {
             totalCount: matchCount,
             hasMore: safeOffset + pageItems.count < matchCount
         )
+    }
+
+    private func favoriteWhereClause(
+        for collection: Collection,
+        filter: FavoriteFilter
+    ) -> String {
+        guard collection == .favorites else { return "" }
+        switch filter {
+        case .all:
+            return " WHERE is_favorite = 1"
+        case .uncategorized:
+            return " WHERE is_favorite = 1 AND favorite_category_id IS NULL"
+        case .category:
+            return " WHERE is_favorite = 1 AND favorite_category_id = ?"
+        }
+    }
+
+    private func favoriteBindings(
+        for collection: Collection,
+        filter: FavoriteFilter
+    ) -> [Binding] {
+        guard collection == .favorites else { return [] }
+        if case let .category(id) = filter {
+            return [.text(id.uuidString)]
+        }
+        return []
     }
 
     private func upsert(_ item: HistoryItem, database: OpaquePointer) throws -> HistoryItem {
@@ -366,19 +565,23 @@ actor HistoryStore {
         let encryptedPayload = try encrypt(JSONEncoder().encode(payload))
         try execute(
             """
-            INSERT INTO history_items(id, payload, timestamp, is_favorite)
-            VALUES(?, ?, ?, ?)
+            INSERT INTO history_items(id, payload, timestamp, is_favorite, favorite_category_id)
+            VALUES(?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 payload = excluded.payload,
                 timestamp = excluded.timestamp,
-                is_favorite = excluded.is_favorite
+                is_favorite = excluded.is_favorite,
+                favorite_category_id = excluded.favorite_category_id
             """,
             database: database,
             bindings: [
                 .text(item.id.uuidString),
                 .blob(encryptedPayload),
                 .double(item.timestamp.timeIntervalSince1970),
-                .integer(item.isFavorite ? 1 : 0)
+                .integer(item.isFavorite ? 1 : 0),
+                item.isFavorite
+                    ? item.favoriteCategoryID.map { .text($0.uuidString) } ?? .null
+                    : .null
             ]
         )
 
@@ -393,7 +596,8 @@ actor HistoryStore {
             fileURL: item.fileURL,
             fileURLs: item.fileURLs,
             timestamp: item.timestamp,
-            isFavorite: item.isFavorite
+            isFavorite: item.isFavorite,
+            favoriteCategoryID: item.favoriteCategoryID
         )
     }
 
@@ -431,6 +635,9 @@ actor HistoryStore {
 
         let timestamp = Date(timeIntervalSince1970: sqlite3_column_double(statement, 2))
         let isFavorite = sqlite3_column_int(statement, 3) != 0
+        let favoriteCategoryID = sqlite3_column_text(statement, 4).flatMap {
+            UUID(uuidString: String(cString: $0))
+        }
         let imageFileURL = payload.imageFileName.map {
             imagesDirectory.appendingPathComponent($0).absoluteString
         }
@@ -452,14 +659,15 @@ actor HistoryStore {
             fileURL: payload.fileURL,
             fileURLs: payload.fileURLs,
             timestamp: timestamp,
-            isFavorite: isFavorite
+            isFavorite: isFavorite,
+            favoriteCategoryID: favoriteCategoryID
         )
     }
 
     private func deleteExpiredItems(before date: Date, database: OpaquePointer) throws {
         let items = try queryItems(
             """
-            SELECT id, payload, timestamp, is_favorite
+            SELECT id, payload, timestamp, is_favorite, favorite_category_id
             FROM history_items
             WHERE is_favorite = 0 AND timestamp < ?
             """,
@@ -583,6 +791,58 @@ actor HistoryStore {
 
     // MARK: - Helpers
 
+    private func loadCategories(database: OpaquePointer) throws -> [FavoriteCategory] {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(
+            database,
+            "SELECT id, name, created_at FROM favorite_categories ORDER BY created_at ASC",
+            -1,
+            &statement,
+            nil
+        ) == SQLITE_OK, let statement else {
+            throw StoreError.sqlite(String(cString: sqlite3_errmsg(database)))
+        }
+        defer { sqlite3_finalize(statement) }
+
+        var categories: [FavoriteCategory] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let idText = sqlite3_column_text(statement, 0),
+                  let id = UUID(uuidString: String(cString: idText)),
+                  let nameText = sqlite3_column_text(statement, 1) else { continue }
+            categories.append(
+                FavoriteCategory(
+                    id: id,
+                    name: String(cString: nameText),
+                    createdAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 2))
+                )
+            )
+        }
+        return categories
+    }
+
+    private func hasColumn(
+        _ columnName: String,
+        in tableName: String,
+        database: OpaquePointer
+    ) throws -> Bool {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(
+            database,
+            "PRAGMA table_info(\(tableName))",
+            -1,
+            &statement,
+            nil
+        ) == SQLITE_OK, let statement else {
+            throw StoreError.sqlite(String(cString: sqlite3_errmsg(database)))
+        }
+        defer { sqlite3_finalize(statement) }
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let name = sqlite3_column_text(statement, 1) else { continue }
+            if String(cString: name) == columnName { return true }
+        }
+        return false
+    }
+
     private func encrypt(_ data: Data) throws -> Data {
         if let testEncryptionKey {
             return try HistoryCrypto.encrypt(data, using: testEncryptionKey)
@@ -623,13 +883,18 @@ actor HistoryStore {
         )
     }
 
-    private func scalarInt(_ sql: String, database: OpaquePointer) throws -> Int {
+    private func scalarInt(
+        _ sql: String,
+        database: OpaquePointer,
+        bindings: [Binding] = []
+    ) throws -> Int {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
               let statement else {
             throw StoreError.sqlite(String(cString: sqlite3_errmsg(database)))
         }
         defer { sqlite3_finalize(statement) }
+        try bind(bindings, to: statement, database: database)
         guard sqlite3_step(statement) == SQLITE_ROW else { return 0 }
         return Int(sqlite3_column_int64(statement, 0))
     }
@@ -685,7 +950,7 @@ actor HistoryStore {
 
     private func imageFileName(for id: UUID, database: OpaquePointer) throws -> String? {
         let items = try queryItems(
-            "SELECT id, payload, timestamp, is_favorite FROM history_items WHERE id = ? LIMIT 1",
+            "SELECT id, payload, timestamp, is_favorite, favorite_category_id FROM history_items WHERE id = ? LIMIT 1",
             database: database,
             bindings: [.text(id.uuidString)]
         )
@@ -705,7 +970,7 @@ actor HistoryStore {
     private func cleanupOrphanedImages(database: OpaquePointer) {
         let referencedFiles = Set(
             (try? queryItems(
-                "SELECT id, payload, timestamp, is_favorite FROM history_items",
+                "SELECT id, payload, timestamp, is_favorite, favorite_category_id FROM history_items",
                 database: database
             ))?.compactMap { item in
                 item.imageFileURL.flatMap { URL(string: $0)?.lastPathComponent }

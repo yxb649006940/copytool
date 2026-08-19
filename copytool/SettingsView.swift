@@ -105,25 +105,6 @@ struct SettingsView: View {
             }
 
             Spacer()
-
-            Button(action: {
-                onClose?()
-            }) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 14))
-                    .foregroundColor(.secondary)
-                    .padding(8)
-                    .background(Color(NSColor.controlBackgroundColor))
-                    .cornerRadius(8)
-            }
-            .buttonStyle(PlainButtonStyle())
-            .onHover { isHovered in
-                if isHovered {
-                    NSCursor.pointingHand.push()
-                } else {
-                    NSCursor.pop()
-                }
-            }
         }
         .padding(.vertical, 20)
         .padding(.horizontal, 24)

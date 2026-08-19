@@ -13,6 +13,12 @@ struct ContentView: View {
     @State private var scrollToTop = false  // 标记是否需要滚动到顶部
     @State private var selectedTab: Tab = .history  // 当前选中的 tab
     @State private var isShowingClearConfirmation = false
+    @State private var favoritePickerItem: HistoryItem?
+    @State private var isShowingNewCategoryDialog = false
+    @State private var categoryNameDraft = ""
+    @State private var categoryBeingRenamed: FavoriteCategory?
+    @State private var categoryBeingDeleted: FavoriteCategory?
+    @State private var pendingFavoriteScrollToTop = false
 
     enum Tab {
         case history
@@ -84,10 +90,11 @@ struct ContentView: View {
         }
         .onChange(of: searchText) { oldText, newText in
             if oldText != newText {
-                scrollToTop = true
                 if selectedTab == .history {
+                    scrollToTop = true
                     clipboardManager.searchHistory(newText)
                 } else {
+                    pendingFavoriteScrollToTop = true
                     clipboardManager.searchFavorites(newText)
                 }
             }
@@ -98,6 +105,11 @@ struct ContentView: View {
             } else {
                 clipboardManager.searchFavorites(searchText)
             }
+        }
+        .onChange(of: clipboardManager.favoriteFilter) { _, _ in
+            selectedItemID = nil
+            scrollToTop = false
+            pendingFavoriteScrollToTop = true
         }
         // 当主窗口消失时，确保预览窗口也隐藏
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didHideNotification)) { _ in
@@ -120,6 +132,75 @@ struct ContentView: View {
         } message: {
             Text("此操作会同时删除历史和收藏，且无法撤销。")
         }
+        .sheet(item: $favoritePickerItem) { item in
+            FavoriteCategoryPickerSheet(
+                categories: clipboardManager.favoriteCategories,
+                onSelect: { categoryID in
+                    clipboardManager.setFavorite(item: item, categoryID: categoryID)
+                    favoritePickerItem = nil
+                },
+                onCreate: { name in
+                    Task {
+                        if let category = await clipboardManager.createFavoriteCategory(name: name) {
+                            clipboardManager.setFavorite(item: item, categoryID: category.id)
+                        }
+                        favoritePickerItem = nil
+                    }
+                },
+                onCancel: {
+                    favoritePickerItem = nil
+                }
+            )
+        }
+        .alert("新建分类", isPresented: $isShowingNewCategoryDialog) {
+            TextField("分类名称", text: $categoryNameDraft)
+            Button("取消", role: .cancel) {
+                categoryNameDraft = ""
+            }
+            Button("创建") {
+                let name = categoryNameDraft
+                categoryNameDraft = ""
+                Task {
+                    if let category = await clipboardManager.createFavoriteCategory(name: name) {
+                        clipboardManager.selectFavoriteFilter(.category(category.id))
+                    }
+                }
+            }
+            .disabled(!isValidCategoryName(categoryNameDraft))
+        } message: {
+            Text("创建后可以把收藏移动到该分类。")
+        }
+        .alert("重命名分类", isPresented: renameCategoryDialogBinding) {
+            TextField("分类名称", text: $categoryNameDraft)
+            Button("取消", role: .cancel) {
+                categoryBeingRenamed = nil
+                categoryNameDraft = ""
+            }
+            Button("保存") {
+                guard let category = categoryBeingRenamed else { return }
+                let name = categoryNameDraft
+                categoryBeingRenamed = nil
+                categoryNameDraft = ""
+                Task {
+                    _ = await clipboardManager.renameFavoriteCategory(category, name: name)
+                }
+            }
+            .disabled(!isValidCategoryName(categoryNameDraft))
+        }
+        .alert("删除分类？", isPresented: deleteCategoryDialogBinding) {
+            Button("取消", role: .cancel) {
+                categoryBeingDeleted = nil
+            }
+            Button("删除", role: .destructive) {
+                guard let category = categoryBeingDeleted else { return }
+                categoryBeingDeleted = nil
+                Task {
+                    _ = await clipboardManager.deleteFavoriteCategory(category)
+                }
+            }
+        } message: {
+            Text("分类中的收藏不会被删除，将自动移到默认分类。")
+        }
     }
 
     private func showSettingsWindow() {
@@ -138,6 +219,28 @@ struct ContentView: View {
         pendingHoverItem = nil
         hoverItem = nil
         PreviewWindowManager.shared.hidePreview()
+    }
+
+    private var renameCategoryDialogBinding: Binding<Bool> {
+        Binding(
+            get: { categoryBeingRenamed != nil },
+            set: { if !$0 { categoryBeingRenamed = nil } }
+        )
+    }
+
+    private var deleteCategoryDialogBinding: Binding<Bool> {
+        Binding(
+            get: { categoryBeingDeleted != nil },
+            set: { if !$0 { categoryBeingDeleted = nil } }
+        )
+    }
+
+    private func isValidCategoryName(_ name: String) -> Bool {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !trimmedName.isEmpty
+            && !["默认", "全部"].contains(where: {
+                $0.caseInsensitiveCompare(trimmedName) == .orderedSame
+            })
     }
 
     // 新增：Tab 导航视图
@@ -355,7 +458,11 @@ struct ContentView: View {
                                     clipboardManager.copyToClipboard(item: item)
                                 },
                                 onToggleFavorite: {
-                                    clipboardManager.toggleFavorite(item: item)
+                                    if item.isFavorite {
+                                        clipboardManager.toggleFavorite(item: item)
+                                    } else {
+                                        favoritePickerItem = item
+                                    }
                                 },
                                 onDelete: {
                                     clipboardManager.removeItem(id: item.id)
@@ -469,108 +576,393 @@ struct ContentView: View {
 
     // 新增：收藏列表视图
     private var favoritesListView: some View {
-        Group {
-            if filteredFavorites.isEmpty && clipboardManager.isLoadingFavorites {
-                ProgressView("正在加载…")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if filteredFavorites.isEmpty {
-                if searchText.isEmpty {
+        VStack(spacing: 0) {
+            favoriteCategoryBar
+            Divider()
+
+            Group {
+                if filteredFavorites.isEmpty && clipboardManager.isLoadingFavorites {
+                    ProgressView("正在加载…")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if filteredFavorites.isEmpty {
                     VStack(spacing: 16) {
-                        Image(systemName: "star")
-                            .font(.system(size: 48))
+                        Image(systemName: searchText.isEmpty ? "folder" : "magnifyingglass")
+                            .font(.system(size: 42))
                             .foregroundColor(.secondary)
 
-                        Text("暂无收藏记录")
+                        Text(searchText.isEmpty ? "此分类暂无收藏" : "未找到匹配的收藏")
                             .font(.headline)
                             .foregroundColor(.secondary)
 
-                        Text("点击剪贴记录上的星标按钮来添加收藏")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary.opacity(0.6))
+                        Text(
+                            searchText.isEmpty
+                                ? "收藏时可选择该分类，或把已有收藏移动到这里"
+                                : "尝试使用其他关键词搜索"
+                        )
+                        .font(.subheadline)
+                        .foregroundColor(.secondary.opacity(0.6))
+                        .multilineTextAlignment(.center)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .padding()
                 } else {
-                    VStack(spacing: 16) {
-                        Image(systemName: "magnifyingglass")
-                            .font(.system(size: 48))
-                            .foregroundColor(.secondary)
-
-                        Text("未找到匹配的收藏")
-                            .font(.headline)
-                            .foregroundColor(.secondary)
-
-                        Text("尝试使用其他关键词搜索")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary.opacity(0.6))
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding()
-                }
-            } else {
-                // 使用 ScrollViewReader 来控制滚动位置
-                ScrollViewReader { proxy in
-                    // 使用 List 替代 ScrollView + VStack，利用懒加载优化性能
-                    List {
-                        ForEach(filteredFavorites) { item in
-                            // 使用 item.id 直接查找原始索引，减少遍历次数
-                            FavoriteItemView(
-                                item: item,
-                                isSelected: selectedItemID == item.id,
-                                onSelect: {
-                                    selectedItemID = item.id
-                                },
-                                onHover: { hoverItem in
-                                    updateHoverPreview(hoverItem)
-                                },
-                                onCopy: {
-                                    clipboardManager.copyToClipboard(item: item)
-                                },
-                                onUnfavorite: {
-                                    clipboardManager.toggleFavorite(item: item)
+                    ScrollViewReader { proxy in
+                        List {
+                            ForEach(filteredFavorites) { item in
+                                FavoriteItemView(
+                                    item: item,
+                                    categories: clipboardManager.favoriteCategories,
+                                    isSelected: selectedItemID == item.id,
+                                    onSelect: {
+                                        selectedItemID = item.id
+                                    },
+                                    onHover: { hoverItem in
+                                        updateHoverPreview(hoverItem)
+                                    },
+                                    onCopy: {
+                                        clipboardManager.copyToClipboard(item: item)
+                                    },
+                                    onMove: { categoryID in
+                                        clipboardManager.moveFavorite(item, to: categoryID)
+                                    },
+                                    onUnfavorite: {
+                                        clipboardManager.toggleFavorite(item: item)
+                                    }
+                                )
+                                .listRowSeparator(.hidden)
+                                .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+                                .id(item.id)
+                            }
+                            if clipboardManager.hasMoreFavorites {
+                                HStack {
+                                    Spacer()
+                                    ProgressView()
+                                        .controlSize(.small)
+                                    Spacer()
                                 }
-                            )
-                            .listRowSeparator(.hidden)
-                            .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
-                            .id(item.id)  // 为每个项目添加 id 用于滚动定位
-                        }
-                        if clipboardManager.hasMoreFavorites {
-                            HStack {
-                                Spacer()
-                                ProgressView()
-                                    .controlSize(.small)
-                                Spacer()
-                            }
-                            .padding(.vertical, 8)
-                            .listRowSeparator(.hidden)
-                            .onAppear {
-                                clipboardManager.loadMoreFavorites()
+                                .padding(.vertical, 8)
+                                .listRowSeparator(.hidden)
+                                .onAppear {
+                                    clipboardManager.loadMoreFavorites()
+                                }
                             }
                         }
-                    }
-                    .listStyle(.plain)
-                    .onHover { isHovered in
-                        // 当鼠标离开整个列表区域时，确保预览窗口关闭
-                        if !isHovered {
-                            updateHoverPreview(nil)
+                        .listStyle(.plain)
+                        .id(favoriteListIdentity)
+                        .onHover { isHovered in
+                            if !isHovered {
+                                updateHoverPreview(nil)
+                            }
                         }
-                    }
-                    .onAppear {
-                        // 窗口出现时，滚动到顶部（显示最新记录）
-                        if let firstItem = filteredFavorites.first {
-                            proxy.scrollTo(firstItem.id, anchor: .top)
+                        .onAppear {
+                            if pendingFavoriteScrollToTop,
+                               !clipboardManager.isLoadingFavorites {
+                                finishPendingFavoriteScroll(using: proxy)
+                            } else if let firstItem = filteredFavorites.first {
+                                proxy.scrollTo(firstItem.id, anchor: .top)
+                            }
                         }
-                    }
-                    .onChange(of: scrollToTop) { _, shouldScroll in
-                        // 当需要滚动到顶部时
-                        if shouldScroll, let firstItem = filteredFavorites.first {
-                            proxy.scrollTo(firstItem.id, anchor: .top)
-                            scrollToTop = false
+                        .onChange(of: clipboardManager.isLoadingFavorites) { _, isLoading in
+                            if !isLoading, pendingFavoriteScrollToTop {
+                                finishPendingFavoriteScroll(using: proxy)
+                            }
+                        }
+                        .onChange(of: filteredFavorites.first?.id) { _, _ in
+                            if !clipboardManager.isLoadingFavorites,
+                               pendingFavoriteScrollToTop {
+                                finishPendingFavoriteScroll(using: proxy)
+                            }
+                        }
+                        .onChange(of: scrollToTop) { _, shouldScroll in
+                            if shouldScroll, let firstItem = filteredFavorites.first {
+                                proxy.scrollTo(firstItem.id, anchor: .top)
+                                scrollToTop = false
+                            }
                         }
                     }
                 }
             }
         }
+    }
+
+    private var favoriteCategoryBar: some View {
+        HStack(spacing: 8) {
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        FavoriteCategoryChip(
+                            title: "全部",
+                            systemImage: "square.grid.2x2",
+                            isSelected: clipboardManager.favoriteFilter == .all
+                        ) {
+                            clipboardManager.selectFavoriteFilter(.all)
+                        }
+                        .id("favorite-category-all")
+
+                        FavoriteCategoryChip(
+                            title: "默认",
+                            systemImage: "tray",
+                            isSelected: clipboardManager.favoriteFilter == .uncategorized
+                        ) {
+                            clipboardManager.selectFavoriteFilter(.uncategorized)
+                        }
+                        .id("favorite-category-default")
+
+                        ForEach(clipboardManager.favoriteCategories) { category in
+                            FavoriteCategoryChip(
+                                title: category.name,
+                                systemImage: "folder",
+                                isSelected: clipboardManager.favoriteFilter == .category(category.id)
+                            ) {
+                                clipboardManager.selectFavoriteFilter(.category(category.id))
+                            }
+                            .contextMenu {
+                                Button("重命名") {
+                                    beginRenamingCategory(category)
+                                }
+                                Divider()
+                                Button("删除分类", role: .destructive) {
+                                    categoryBeingDeleted = category
+                                }
+                            }
+                            .help("点击切换分类，右键可重命名或删除")
+                            .id(category.id)
+                        }
+                    }
+                    .padding(.trailing, 10)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .onAppear {
+                    scrollSelectedFavoriteCategory(using: proxy, animated: false)
+                }
+                .onChange(of: clipboardManager.favoriteFilter) { _, _ in
+                    scrollSelectedFavoriteCategory(using: proxy, animated: true)
+                }
+            }
+            .padding(.leading, 10)
+            .layoutPriority(1)
+
+            if case let .category(id) = clipboardManager.favoriteFilter,
+               let category = clipboardManager.favoriteCategories.first(where: { $0.id == id }) {
+                Menu {
+                    Button("重命名") {
+                        beginRenamingCategory(category)
+                    }
+                    Divider()
+                    Button("删除分类", role: .destructive) {
+                        categoryBeingDeleted = category
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .font(.system(size: 14))
+                        .foregroundColor(.secondary)
+                        .frame(width: 28, height: 28)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .help("管理当前分类")
+            }
+
+            Button {
+                categoryNameDraft = ""
+                isShowingNewCategoryDialog = true
+            } label: {
+                Image(systemName: "folder.badge.plus")
+                    .font(.system(size: 14))
+                    .foregroundColor(.accentColor)
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.plain)
+            .help("新建分类")
+            .padding(.trailing, 10)
+        }
+        .frame(height: 42)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(NSColor.controlBackgroundColor).opacity(0.65))
+    }
+
+    private func beginRenamingCategory(_ category: FavoriteCategory) {
+        categoryNameDraft = category.name
+        categoryBeingRenamed = category
+    }
+
+    private var favoriteListIdentity: String {
+        switch clipboardManager.favoriteFilter {
+        case .all:
+            return "favorite-list-all"
+        case .uncategorized:
+            return "favorite-list-default"
+        case .category(let id):
+            return "favorite-list-\(id.uuidString)"
+        }
+    }
+
+    private func finishPendingFavoriteScroll(using proxy: ScrollViewProxy) {
+        guard let firstItemID = filteredFavorites.first?.id else {
+            pendingFavoriteScrollToTop = false
+            return
+        }
+
+        pendingFavoriteScrollToTop = false
+        DispatchQueue.main.async {
+            proxy.scrollTo(firstItemID, anchor: .top)
+            // List 会在数据替换后恢复旧锚点，再下一帧定位一次可确保真正回到顶部。
+            DispatchQueue.main.async {
+                proxy.scrollTo(firstItemID, anchor: .top)
+            }
+        }
+    }
+
+    private func scrollSelectedFavoriteCategory(
+        using proxy: ScrollViewProxy,
+        animated: Bool
+    ) {
+        let target: AnyHashable
+        let anchor: UnitPoint
+        switch clipboardManager.favoriteFilter {
+        case .all:
+            target = "favorite-category-all"
+            anchor = .leading
+        case .uncategorized:
+            target = "favorite-category-default"
+            anchor = .center
+        case .category(let id):
+            target = id
+            anchor = .trailing
+        }
+
+        if animated {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                proxy.scrollTo(target, anchor: anchor)
+            }
+        } else {
+            proxy.scrollTo(target, anchor: anchor)
+        }
+    }
+}
+
+private struct FavoriteCategoryChip: View {
+    let title: String
+    let systemImage: String
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .foregroundColor(isSelected ? .accentColor : .secondary)
+                .background(
+                    Capsule()
+                        .fill(isSelected ? Color.accentColor.opacity(0.13) : Color.clear)
+                )
+                .overlay(
+                    Capsule()
+                        .stroke(
+                            isSelected ? Color.accentColor.opacity(0.5) : Color(NSColor.separatorColor),
+                            lineWidth: 0.5
+                        )
+                )
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct FavoriteCategoryPickerSheet: View {
+    let categories: [FavoriteCategory]
+    let onSelect: (UUID?) -> Void
+    let onCreate: (String) -> Void
+    let onCancel: () -> Void
+    @State private var newCategoryName = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("收藏到分类")
+                        .font(.headline)
+                    Text("选择一个分类，也可以直接新建")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+                Button("取消", action: onCancel)
+                    .buttonStyle(.plain)
+                    .foregroundColor(.secondary)
+            }
+
+            ScrollView {
+                VStack(spacing: 8) {
+                    categoryButton(title: "默认", systemImage: "tray") {
+                        onSelect(nil)
+                    }
+                    ForEach(categories) { category in
+                        categoryButton(title: category.name, systemImage: "folder") {
+                            onSelect(category.id)
+                        }
+                    }
+                }
+            }
+            .frame(maxHeight: 220)
+
+            Divider()
+
+            HStack(spacing: 8) {
+                TextField("新分类名称", text: $newCategoryName)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit(createCategory)
+                Button("新建并收藏", action: createCategory)
+                    .disabled(!isValidCategoryName)
+            }
+        }
+        .padding(20)
+        .frame(width: 360)
+    }
+
+    private var trimmedCategoryName: String {
+        newCategoryName.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var isValidCategoryName: Bool {
+        !trimmedCategoryName.isEmpty
+            && !["默认", "全部"].contains(where: {
+                $0.caseInsensitiveCompare(trimmedCategoryName) == .orderedSame
+            })
+    }
+
+    private func createCategory() {
+        guard isValidCategoryName else { return }
+        onCreate(trimmedCategoryName)
+    }
+
+    private func categoryButton(
+        title: String,
+        systemImage: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: systemImage)
+                    .foregroundColor(.accentColor)
+                    .frame(width: 20)
+                Text(title)
+                    .foregroundColor(.primary)
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(Color(NSColor.controlBackgroundColor))
+            .cornerRadius(8)
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -776,19 +1168,24 @@ struct HistoryItemView: View {
 // 新增：收藏项视图
 struct FavoriteItemView: View {
     let item: HistoryItem
+    let categories: [FavoriteCategory]
     let isSelected: Bool
     let onSelect: () -> Void
     let onHover: (HistoryItem?) -> Void
     let onCopy: () -> Void
+    let onMove: (UUID?) -> Void
     let onUnfavorite: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
             contentPreview
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-            Spacer()
-
-            unfavoriteButton
+            HStack(spacing: 6) {
+                moveButton
+                unfavoriteButton
+            }
+            .fixedSize()
         }
         .padding(12)
         .modifier(ClipboardRowSelectionModifier(isSelected: isSelected))
@@ -821,8 +1218,56 @@ struct FavoriteItemView: View {
 
                     Spacer()
                 }
+
+                Label(categoryName, systemImage: item.favoriteCategoryID == nil ? "tray" : "folder")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
             }
         }
+    }
+
+    private var categoryName: String {
+        guard let categoryID = item.favoriteCategoryID else { return "默认" }
+        return categories.first(where: { $0.id == categoryID })?.name ?? "默认"
+    }
+
+    private var moveButton: some View {
+        Menu {
+            Button {
+                onMove(nil)
+            } label: {
+                if item.favoriteCategoryID == nil {
+                    Label("默认", systemImage: "checkmark")
+                } else {
+                    Text("默认")
+                }
+            }
+
+            if !categories.isEmpty {
+                Divider()
+            }
+            ForEach(categories) { category in
+                Button {
+                    onMove(category.id)
+                } label: {
+                    if item.favoriteCategoryID == category.id {
+                        Label(category.name, systemImage: "checkmark")
+                    } else {
+                        Text(category.name)
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "folder")
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+                .padding(6)
+                .background(Color(NSColor.controlBackgroundColor))
+                .cornerRadius(4)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .help("移动到其他分类")
     }
 
     private var typeIcon: some View {

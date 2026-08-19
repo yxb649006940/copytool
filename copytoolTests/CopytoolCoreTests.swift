@@ -1,5 +1,6 @@
 import XCTest
 import CryptoKit
+import SQLite3
 @testable import CopytoolCore
 
 final class CopytoolCoreTests: XCTestCase {
@@ -171,6 +172,112 @@ final class CopytoolCoreTests: XCTestCase {
             contentsOf: directory.appendingPathComponent("clipboardHistory.sqlite")
         )
         XCTAssertFalse(String(decoding: databaseData, as: UTF8.self).contains("private-content"))
+    }
+
+    func testFavoriteCategoriesSupportDefaultFilteringMovingAndDeletion() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("copytool-category-tests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = HistoryStore(
+            appDirectory: directory,
+            encryptionKey: SymmetricKey(size: .bits256),
+            migratesUserDefaults: false
+        )
+        let defaultItem = HistoryItem(text: "default favorite")
+        let workItem = HistoryItem(text: "work favorite")
+        let storedDefaultItem = await store.upsert(defaultItem)
+        let storedWorkItem = await store.upsert(workItem)
+        XCTAssertNotNil(storedDefaultItem)
+        XCTAssertNotNil(storedWorkItem)
+
+        let createdWorkCategory = await store.createCategory(name: "工作")
+        let work = try XCTUnwrap(createdWorkCategory)
+        let duplicateCategory = await store.createCategory(name: "工作")
+        XCTAssertNil(duplicateCategory)
+        await store.setFavorite(id: defaultItem.id, isFavorite: true)
+        await store.setFavorite(id: workItem.id, isFavorite: true, categoryID: work.id)
+
+        let all = await store.loadFavoritePage(
+            filter: .all,
+            offset: 0,
+            limit: 20,
+            searchText: ""
+        )
+        let uncategorized = await store.loadFavoritePage(
+            filter: .uncategorized,
+            offset: 0,
+            limit: 20,
+            searchText: ""
+        )
+        let categorized = await store.loadFavoritePage(
+            filter: .category(work.id),
+            offset: 0,
+            limit: 20,
+            searchText: ""
+        )
+        XCTAssertEqual(all.totalCount, 2)
+        XCTAssertEqual(uncategorized.items.map(\.id), [defaultItem.id])
+        XCTAssertEqual(categorized.items.map(\.id), [workItem.id])
+        XCTAssertEqual(categorized.items.first?.favoriteCategoryID, work.id)
+
+        await store.moveFavorite(id: workItem.id, categoryID: nil)
+        let movedToDefault = await store.loadFavoritePage(
+            filter: .uncategorized,
+            offset: 0,
+            limit: 20,
+            searchText: ""
+        )
+        XCTAssertEqual(movedToDefault.totalCount, 2)
+
+        await store.moveFavorite(id: workItem.id, categoryID: work.id)
+        let deletedCategory = await store.deleteCategory(id: work.id)
+        let remainingCategories = await store.loadCategories()
+        let itemsAfterDeletion = await store.loadFavoritePage(
+            filter: .uncategorized,
+            offset: 0,
+            limit: 20,
+            searchText: ""
+        )
+        XCTAssertTrue(deletedCategory)
+        XCTAssertTrue(remainingCategories.isEmpty)
+        XCTAssertEqual(itemsAfterDeletion.totalCount, 2)
+    }
+
+    func testExistingSQLiteDatabaseAddsFavoriteCategorySchema() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("copytool-category-migration-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        let databaseURL = directory.appendingPathComponent("clipboardHistory.sqlite")
+        var database: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(databaseURL.path, &database), SQLITE_OK)
+        guard let database else { return XCTFail("无法创建旧版测试数据库") }
+        let oldSchema = """
+            CREATE TABLE history_items (
+                id TEXT PRIMARY KEY NOT NULL,
+                payload BLOB NOT NULL,
+                timestamp REAL NOT NULL,
+                is_favorite INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE store_metadata (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);
+            INSERT INTO store_metadata(key, value) VALUES('legacy_migration_completed', '1');
+            """
+        XCTAssertEqual(sqlite3_exec(database, oldSchema, nil, nil, nil), SQLITE_OK)
+        sqlite3_close(database)
+
+        let store = HistoryStore(
+            appDirectory: directory,
+            encryptionKey: SymmetricKey(size: .bits256),
+            migratesUserDefaults: false
+        )
+        _ = await store.bootstrap(pageSize: 20, expiredBefore: nil)
+        let category = await store.createCategory(name: "迁移后分类")
+        let categories = await store.loadCategories()
+
+        XCTAssertNotNil(category)
+        XCTAssertEqual(categories.count, 1)
     }
 
     func testSQLiteStoreMigratesEncryptedArchive() async throws {
