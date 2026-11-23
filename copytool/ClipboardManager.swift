@@ -153,12 +153,15 @@ final class ClipboardManager: ObservableObject {
             return
         }
 
-        if let string = pasteboard.string(forType: .string), string != lastText {
-            addToHistory(text: string)
-            lastText = string
-            lastImageDigest = nil
-            lastFileURLs = nil
+        guard let string = HistoryItem.nonBlankText(pasteboard.string(forType: .string)) else {
+            resetDuplicateTracking()
+            return
         }
+        guard string != lastText else { return }
+        addToHistory(text: string)
+        lastText = string
+        lastImageDigest = nil
+        lastFileURLs = nil
     }
 
     private var containsSensitiveContent: Bool {
@@ -540,17 +543,18 @@ final class ClipboardManager: ObservableObject {
 
     func copyToClipboard(item: HistoryItem) {
         PreviewWindowManager.shared.hidePreview()
-        pasteboard.clearContents()
 
         switch item.contentType {
         case .text:
-            guard let text = item.textContent else { return }
+            guard let text = HistoryItem.nonBlankText(item.textContent) else { return }
+            pasteboard.clearContents()
             pasteboard.setString(text, forType: .string)
             lastText = text
             lastImageDigest = nil
             lastFileURLs = nil
         case .image:
             guard let image = item.image else { return }
+            pasteboard.clearContents()
             pasteboard.writeObjects([image])
             lastImageDigest = item.imageDigest
             lastText = nil
@@ -558,6 +562,7 @@ final class ClipboardManager: ObservableObject {
         case .file:
             let fileURLs = item.resolvedFileURLs
             guard !fileURLs.isEmpty else { return }
+            pasteboard.clearContents()
             pasteboard.writeObjects(fileURLs.map { $0 as NSURL })
             lastFileURLs = fileURLs
             lastText = nil

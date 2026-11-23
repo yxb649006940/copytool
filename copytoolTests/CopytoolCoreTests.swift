@@ -89,6 +89,16 @@ final class CopytoolCoreTests: XCTestCase {
         XCTAssertEqual(HistoryItem(fileURL: fileURL).previewImageData(), data)
     }
 
+    func testBlankClipboardTextIsRejectedWhileNonBlankTextKeepsItsFormatting() {
+        XCTAssertNil(HistoryItem.nonBlankText(nil))
+        XCTAssertNil(HistoryItem.nonBlankText(""))
+        XCTAssertNil(HistoryItem.nonBlankText(" \t\r\n\u{3000}"))
+        XCTAssertEqual(HistoryItem(text: "\n\t").displayText, "空白文本")
+
+        let formatted = "  第一行\n\t第二行\n"
+        XCTAssertEqual(HistoryItem.nonBlankText(formatted), formatted)
+    }
+
     func testSearchableTextIncludesContentPastDisplaySummary() {
         let suffix = "only-found-after-fifty-characters"
         let item = HistoryItem(text: String(repeating: "x", count: 60) + suffix)

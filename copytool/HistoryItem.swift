@@ -271,10 +271,19 @@ struct HistoryItem: Identifiable, Codable, Equatable, Sendable {
             .joined(separator: " ")
     }
 
+    /// 忽略空白文本，保留有效文本的原始格式。
+    static func nonBlankText(_ text: String?) -> String? {
+        guard let text, text.unicodeScalars.contains(where: {
+            !CharacterSet.whitespacesAndNewlines.contains($0)
+        }) else { return nil }
+        return text
+    }
+
     /// 获取用于显示的文本
     /// - Returns: 文本内容的截断版本（最多50字符）
     var displayText: String {
-        if let text = textContent {
+        if contentType == .text {
+            guard let text = Self.nonBlankText(textContent) else { return "空白文本" }
             return text.count > 50 ? String(text.prefix(50)) + "..." : text
         } else if let fileName = fileName {
             return fileName
